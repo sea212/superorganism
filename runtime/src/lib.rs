@@ -23,6 +23,8 @@ use sp_version::RuntimeVersion;
 #[cfg(feature = "std")]
 use sp_version::NativeVersion;
 
+use frame_system::EnsureRoot;
+
 // A few exports that help ease life for downstream crates.
 #[cfg(any(feature = "std", test))]
 pub use sp_runtime::BuildStorage;
@@ -263,8 +265,110 @@ impl pallet_sudo::Trait for Runtime {
 	type Call = Call;
 }
 
+
+parameter_types! {
+	pub const MaxScheduledPerBlock: u32 = 30;
+}
+
+impl pallet_scheduler::Trait for Runtime {
+	type Event = Event;
+	type Origin = Origin;
+	type PalletsOrigin = OriginCaller;
+	type Call = Call;
+	type MaximumWeight = MaximumBlockWeight;
+	type ScheduleOrigin = EnsureRoot<AccountId>;
+	type MaxScheduledPerBlock = MaxScheduledPerBlock;
+	type WeightInfo = ();
+}
+
+
+parameter_types! {
+	const TwoYears: u32 = 63_115_200;
+	// TODO: Change from test value to OneWeek
+	const OneWeek: BlockNumber = 10; // DAYS * 7 as BlockNumber;
+
+	/// How long is an identified user locked out from submitting proposals / concerns
+	/// for bad behaviour. Value in seconds.
+	pub const IdentifiedUserPenality: u32 = TwoYears::get();
+	/// Part 1.1: Proposal state configuration
+	// How many (slashable) funds must a simple User (no identity) lock to be able to propose?
+	// pub const UserProposeFee : Balance = 1_000_000_000_000
+	/// How many proposals can an identified user submit per proposal round?
+	pub const ProposeIdentifiedUserCap: u8 =  1;
+	/// How high is the reward (%) for the proposer if the proposal is converted into a project?
+	pub const ProposeReward: Permill = Permill::from_percent(5);
+	/// How long can proposals be submitted? Value in blocks.
+	pub const ProposeRoundDuration: BlockNumber = OneWeek::get();
+	/// Part 1.2: Proposal voting state configuration
+	/// How many votes (%) does a proposal require to be accepted for the next round?
+	pub const ProposeVoteAcceptanceMin: Permill = Permill::from_percent(10);
+	/// How long can votes for proposals be submitted? Value in blocks.
+	pub const ProposeVoteDuration: BlockNumber = OneWeek::get();
+	/// Which identity level (number of random verifications) is required to vote?
+	pub const ProposeVoteIdentityLevel: u16 = 3;
+	/// How many votes can each identified user (with an appropriate identity level) submit?
+	pub const ProposeVoteMaxPerIdentifiedUser: u16 = 3;
+	/// How high is the reward if a concern that the user voted for passes into next round?
+	pub const ProposeVoteCorrectReward: Balance = 10_000_000;
+	/// Part 2.1: Concern state configuration
+	/// How many concerns can an identified user submit per concern round?
+	pub const ConcernIdentifiedUserCap: u8 = 1;
+	/// How high is the reward if the concern receives enough votes to be passed to the next state?
+	pub const ConcernReward: Balance = 1_000_000;
+	/// How long can concerns be submitted? Value in blocks.
+	pub const ConcernRoundDuration: BlockNumber = OneWeek::get();
+	// How many (slashable) funds must a simple User (no identity) lock to be able to submit a concern?
+	// pub const UserConcernFee: Balance = 1_000_000_000_000;
+	pub const ConcernVoteAcceptanceMin: Permill = Permill::from_percent(3);
+	/// Part 2.2: Concern voting state configuration
+	/// How many votes (%) does a concern require to be accepted for the next round?
+	/// How long can votes for concerns be submitted? Value in blocks.
+	pub const ConcernVoteDuration: BlockNumber = OneWeek::get();
+	/// Which identity level (number of random verifications) is required to vote?
+	pub const ConcernVoteIdentityLevel: u16 = 3;
+	/// How many votes can each identified user (with an appropriate identity level) submit?
+	pub const ConcernVoteMaxPerIdentifiedUser: u16 = 3;
+	/// How high is the reward if a concern that the user voted for passes into next round?
+	pub const ConcernVoteCorrectReward: Balance = 1_000_000;
+	/// Part 3: Final evaluation of the winning proposals and associated concern by the council
+	/// How much time is reserved for the council to vote? Value in blocks.
+	pub const CouncilVoteRoundDuration: BlockNumber = OneWeek::get();
+	/// How many percent of the council must agree that a concern is too serious to launch a
+	/// project from the associated proposal?
+	pub const CouncilAcceptConcernMinVotes: Permill = Permill::from_percent(85);
+}
+
 /// Configure the proposal pallet
 impl pallet_proposal::Trait for Runtime {
+	// Type trait constraints
+	type Event = Event;
+	type Currency = pallet_balances::Module<Runtime>;
+	type Scheduler = pallet_scheduler::Module<Runtime>;
+	type PalletsOrigin = OriginCaller;
+	type Proposal = Call;
+
+	// Parameters
+	type IdentifiedUserPenality = IdentifiedUserPenality;
+	// type UserProposeFee = Get<Balance<Self>>;
+	type ProposeIdentifiedUserCap = ProposeIdentifiedUserCap;
+	type ProposeReward = ProposeReward;
+	type ProposeRoundDuration = ProposeRoundDuration;
+	type ProposeVoteAcceptanceMin = ProposeVoteAcceptanceMin;
+	type ProposeVoteDuration = ProposeVoteDuration;
+	type ProposeVoteIdentityLevel = ProposeVoteIdentityLevel;
+	type ProposeVoteMaxPerIdentifiedUser = ProposeVoteMaxPerIdentifiedUser;
+	type ProposeVoteCorrectReward = ProposeVoteCorrectReward;
+	type ConcernIdentifiedUserCap = ConcernIdentifiedUserCap;
+	type ConcernReward = ConcernReward;
+	type ConcernRoundDuration = ConcernRoundDuration;
+	// type UserConcernFee = UserConcernFee;
+	type ConcernVoteAcceptanceMin = ConcernVoteAcceptanceMin;
+	type ConcernVoteDuration = ConcernVoteDuration;
+	type ConcernVoteIdentityLevel = ConcernVoteIdentityLevel;
+	type ConcernVoteMaxPerIdentifiedUser = ConcernVoteMaxPerIdentifiedUser;
+	type ConcernVoteCorrectReward = ConcernVoteCorrectReward;
+	type CouncilVoteRoundDuration = CouncilVoteRoundDuration;
+	type CouncilAcceptConcernMinVotes = CouncilAcceptConcernMinVotes;
 }
 
 /// Configure the project pallet
@@ -289,9 +393,10 @@ construct_runtime!(
 		Grandpa: pallet_grandpa::{Module, Call, Storage, Config, Event},
 		Balances: pallet_balances::{Module, Call, Storage, Config<T>, Event<T>},
 		TransactionPayment: pallet_transaction_payment::{Module, Storage},
+		Scheduler: pallet_scheduler::{Module, Call, Storage, Event<T>},
 		Sudo: pallet_sudo::{Module, Call, Config<T>, Storage, Event<T>},
 		// Custom pallets
-		Proposal: pallet_proposal::{Module},
+		Proposal: pallet_proposal::{Module, Call, Storage, Event, Config},
 		Project: pallet_project::{Module},
 		CommunityIdentity: pallet_community_identity::{Module},
 	}

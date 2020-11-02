@@ -398,7 +398,7 @@ construct_runtime!(
 		// Custom pallets
 		Proposal: pallet_proposal::{Module, Call, Storage, Event, Config},
 		Project: pallet_project::{Module},
-		CommunityIdentity: pallet_community_identity::{Module},
+		CommunityIdentity: pallet_community_identity::{Module, Call},
 	}
 );
 

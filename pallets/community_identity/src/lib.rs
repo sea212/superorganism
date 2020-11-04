@@ -26,7 +26,7 @@ mod mock;
 #[cfg(test)]
 mod tests;
 /// Public interface to PhysicalIdentity
-mod traits;
+pub mod traits;
 
 
 type IdentityLevel = u8;

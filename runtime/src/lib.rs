@@ -293,8 +293,12 @@ parameter_types! {
 	/// Part 1.1: Proposal state configuration
 	// How many (slashable) funds must a simple User (no identity) lock to be able to propose?
 	// pub const UserProposeFee : Balance = 1_000_000_000_000
+	/// How many proposals can be submitted per proposal round? (required for weight calculation)
+	pub const ProposeCap: u32 = 1_000;
 	/// How many proposals can an identified user submit per proposal round?
 	pub const ProposeIdentifiedUserCap: u8 =  1;
+	/// Which identity level is required to create a proposal?
+	pub const ProposeIdentityLevel: u8 = 2;
 	/// How high is the reward (%) for the proposer if the proposal is converted into a project?
 	pub const ProposeReward: Permill = Permill::from_percent(5);
 	/// How long can proposals be submitted? Value in blocks.
@@ -311,6 +315,8 @@ parameter_types! {
 	/// How high is the reward if a concern that the user voted for passes into next round?
 	pub const ProposeVoteCorrectReward: Balance = 10_000_000;
 	/// Part 2.1: Concern state configuration
+	/// How many concerns can be submitted per concern round? (required for weight calculation)
+	pub const ConcernCap: u32 = 1_000;
 	/// How many concerns can an identified user submit per concern round?
 	pub const ConcernIdentifiedUserCap: u8 = 1;
 	/// How high is the reward if the concern receives enough votes to be passed to the next state?
@@ -346,11 +352,14 @@ impl pallet_proposal::Trait for Runtime {
 	type Scheduler = pallet_scheduler::Module<Runtime>;
 	type PalletsOrigin = OriginCaller;
 	type Proposal = Call;
+	type Identity = pallet_community_identity::Module<Runtime>;
 
 	// Parameters
 	type IdentifiedUserPenality = IdentifiedUserPenality;
 	// type UserProposeFee = Get<Balance<Self>>;
+	type ProposeCap = ProposeCap;
 	type ProposeIdentifiedUserCap = ProposeIdentifiedUserCap;
+	type ProposeIdentityLevel = ProposeIdentityLevel;
 	type ProposeReward = ProposeReward;
 	type ProposeRoundDuration = ProposeRoundDuration;
 	type ProposeVoteAcceptanceMin = ProposeVoteAcceptanceMin;
@@ -358,6 +367,7 @@ impl pallet_proposal::Trait for Runtime {
 	type ProposeVoteIdentityLevel = ProposeVoteIdentityLevel;
 	type ProposeVoteMaxPerIdentifiedUser = ProposeVoteMaxPerIdentifiedUser;
 	type ProposeVoteCorrectReward = ProposeVoteCorrectReward;
+	type ConcernCap = ConcernCap;
 	type ConcernIdentifiedUserCap = ConcernIdentifiedUserCap;
 	type ConcernReward = ConcernReward;
 	type ConcernRoundDuration = ConcernRoundDuration;

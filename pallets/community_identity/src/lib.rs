@@ -13,12 +13,9 @@
 // limitations under the License.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-use frame_support::{decl_module, dispatch::{
-	Codec, Decode, DispatchError, Encode, fmt::{
-		Debug, Formatter, Result as FMTResult},
-	},
-};
+use frame_support::{decl_module, dispatch::{DispatchError, fmt::Debug,}};
 use frame_system::ensure_signed;
+use codec::{Codec, Decode, Encode, EncodeLike};
 #[cfg(feature = "std")]
 use frame_support::serde::{Deserialize, Serialize};
 #[cfg(test)]
@@ -29,45 +26,33 @@ mod tests;
 pub mod traits;
 
 
-type IdentityLevel = u8;
-type ProofType<T> = PhysicalProof<T, [u8; 32]>;
+pub type IdentityLevel = u8;
+pub type ProofType = [u8; 32];
+pub type IdentityId<T> = <T as frame_system::Trait>::AccountId;
 type Ticket<T> = <T as frame_system::Trait>::AccountId;
-type IdentityId<T> = <T as frame_system::Trait>::AccountId;
 
 /// Structure that contains the proof
-#[derive(Clone, Decode, Encode, Eq, PartialEq)]
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
-pub struct PhysicalProof<T, ProofData> where
-	ProofData: Codec + Clone + Debug + Decode + Encode + Eq + PartialEq,
-	T: Trait,
+pub struct PhysicalProof<BlockNumber, ProofData> where
+	ProofData: Codec + Clone + Debug + Eq + PartialEq,
+	BlockNumber: Codec + Clone + Debug + Eq + PartialEq,
 {
 	proof: ProofData,
-	date: T::BlockNumber,
-}
-
-// impl Debug because Debug cannot be derived for T: Trait
-impl<T, ProofData> Debug for PhysicalProof<T, ProofData> where 
-	ProofData: Codec + Clone + Debug + Decode + Encode + Eq + PartialEq,
-	T: Trait {
-
-    fn fmt(&self, f: &mut Formatter<'_>) -> FMTResult {
-        f.debug_struct("PhysicalProof")
-         .field("proof", &self.proof)
-         .field("date", &self.date)
-         .finish()
-    }
+	date: BlockNumber,
 }
 
 /// Structure that contains the identity ID, level and proof
 #[derive(Clone, Decode, Debug, Encode, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
-pub struct PhysicalIdentityData<T, ProofData> where
-	ProofData: Codec + Clone + Decode + Debug + Encode + Eq + PartialEq,
-	T: Trait,
+pub struct PhysicalIdentityData<BlockNumber, AccountId, ProofData> where
+	ProofData: Codec + Clone + Debug + Eq + PartialEq,
+	AccountId: Codec + Clone + Debug + EncodeLike + Eq,
+	BlockNumber: Codec + Clone + Debug + Eq + PartialEq,
 {
-	identity: T::AccountId,
+	identity: AccountId,
 	level: IdentityLevel,
-	proof: PhysicalProof<T, ProofData>,
+	proof: PhysicalProof<BlockNumber, ProofData>,
 }
 
 /// Configure the pallet by specifying the parameters and types on which it depends.
@@ -87,7 +72,7 @@ decl_module! {
 
 		/// As a reviewer, approve a reviewed PhysicalIdentity by supplying a proof
 		#[weight = 10_000]
-		pub fn approve_identity(origin, review_process: Ticket<T>, proof_data: ProofType<T>) {
+		pub fn approve_identity(origin, review_process: Ticket<T>, proof_data: ProofType) {
 			let _ = ensure_signed(origin)?;
 			Self::do_approve_identity(review_process, proof_data)?;
 		}
@@ -102,29 +87,37 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
-	fn do_request_peer_review(user: Ticket<T>, identity_level: IdentityLevel)
+	fn do_request_peer_review(user: T::AccountId, _identity_level: IdentityLevel)
 		-> Result<T::AccountId, DispatchError>
 	{
 		// TODO implement
 		Ok(user)
 	}
 
-	fn do_approve_identity(review_process: Ticket<T>, proof_data: ProofType<T>)
+	fn do_approve_identity(_review_process: Ticket<T>, _proof_data: ProofType)
 		-> Result<(), DispatchError>
 	{
 		// TODO implement
 		Ok(())
 	}
 
-	fn do_reject_identity(review_process: Ticket<T>) -> Result<(), DispatchError> {
+	fn do_reject_identity(_review_process: Ticket<T>) -> Result<(), DispatchError> {
 		// TODO implement
 		Ok(())
 	}
+
+	fn do_get_identity_level(_identity: &IdentityId<T>) -> IdentityLevel {
+		5
+	}
+
+	fn do_get_identity_id(address: &T::AccountId) -> IdentityId<T> {
+		address.clone()
+	}
 }
 
-impl<T: Trait> traits::PeerReviewedPhysicalIdentity<ProofType<T>> for Module<T> {
+impl<T: Trait> traits::PeerReviewedPhysicalIdentity<ProofType> for Module<T> {
 	type Address = T::AccountId;
-	type Ticket = Ticket<T>;
+	type Ticket = T::AccountId;
 	type IdentityLevel = IdentityLevel;
 	type IdentityId = IdentityId<T>;
 
@@ -136,7 +129,7 @@ impl<T: Trait> traits::PeerReviewedPhysicalIdentity<ProofType<T>> for Module<T> 
 	}
 
 	/// As a reviewer, approve a reviewed PhysicalIdentity by supplying a proof
-	fn approve_identity(review_process: Self::Ticket, proof_data: ProofType<T>)
+	fn approve_identity(review_process: Self::Ticket, proof_data: ProofType)
 		-> Result<(), DispatchError>
 	{
 		Self::do_approve_identity(review_process, proof_data)
@@ -148,8 +141,13 @@ impl<T: Trait> traits::PeerReviewedPhysicalIdentity<ProofType<T>> for Module<T> 
 	}
 
 	/// Receive the identity level of a specific PhysicalIdentity.
-	fn get_identity_level(identity: Self::IdentityId) -> Option<Self::IdentityLevel> {
+	fn get_identity_level(identity: &Self::IdentityId) -> Self::IdentityLevel {
 		// TODO: implement
-		Some(5)
+		Self::do_get_identity_level(identity)
+	}
+
+	/// Get IdentityId for an address
+	fn get_identity_id(address: &Self::Address) -> Self::IdentityId {
+		Self::do_get_identity_id(address)
 	}
 }

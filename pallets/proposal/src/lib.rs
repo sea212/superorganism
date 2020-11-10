@@ -18,18 +18,20 @@
 //! Manages proposal and concern rounds as well as the correspondant voting rounds
 
 
-use frame_support::{decl_module, decl_storage, decl_event, Parameter, print, debug,
-	dispatch::{DispatchResult, Dispatchable, DispatchError},
+use frame_support::{decl_error, decl_module, decl_storage, decl_event, Parameter, ensure, print, debug,
+	dispatch::{Vec, DispatchResult, Dispatchable, DispatchError},
 	traits::{Get, Currency, ReservableCurrency,
 		schedule::{Anon, DispatchTime, LOWEST_PRIORITY},
 	},
-	weights::Weight,
+	//weights::Weight,
 };
-use frame_system::{ensure_root, RawOrigin::Root};
+use frame_system::{ensure_root, ensure_signed, RawOrigin::Root};
 // use frame_system;
 use codec::{Codec, Decode, Encode};
 // Fixed point arithmetic
 use sp_arithmetic::Permill;
+// Identity pallet
+use pallet_community_identity::{ProofType, IdentityId, IdentityLevel, traits::PeerReviewedPhysicalIdentity};
 #[cfg(feature = "std")]
 use frame_support::serde::{Deserialize, Serialize};
 #[cfg(test)]
@@ -38,6 +40,28 @@ mod mock;
 mod tests;
 
 type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::Balance;
+// Important: Change Vec<u8> to a fixed length hash (otherwise attackable)
+type ProposalCID = Vec<u8>;
+
+/// Contains proposals and votes per proposal from a specific identity
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+pub struct Proposal {
+	proposal: ProposalCID,
+	votes: u32,
+}
+
+impl Proposal {
+	fn new(proposal: ProposalCID) -> Self {
+		Proposal{proposal, votes: 0}
+	}
+}
+
+impl Default for Proposal {
+	fn default() -> Self {
+		Proposal::new(Vec::new())
+	}
+}
 
 /// Contains the five different states the pallet can be in
 #[derive(Copy, Clone, Debug, Decode, Encode, Eq, PartialEq)]
@@ -64,10 +88,14 @@ pub trait Trait: frame_system::Trait {
 
 	type Currency: ReservableCurrency<Self::AccountId>;
 
-	/// Define the Scheduler type. Must implement (unamed) scheduling trait Anon
+	/// Define the Scheduler type. Just implement (unamed) scheduling trait Anon
 	type Scheduler: Anon<Self::BlockNumber, Self::Proposal, Self::PalletsOrigin>;
 	type Proposal: Parameter + Dispatchable<Origin=Self::Origin> + From<Call<Self>>;
 	type PalletsOrigin: From<frame_system::RawOrigin<Self::AccountId>> + Codec + Clone + Eq;
+
+	/// Define Identity type. Must implement PeerReviewedPhysicalIdentity trait
+	type Identity: PeerReviewedPhysicalIdentity<ProofType, IdentityId = IdentityId<Self>,
+						IdentityLevel = IdentityLevel, Address = Self::AccountId>;
 
 	// Parameters
 	/// How long is an identified user locked out from submitting proposals / concerns
@@ -77,9 +105,15 @@ pub trait Trait: frame_system::Trait {
 	/// Part 1.1: Proposal state configuration
 	// How many (slashable) funds must a simple User (no identity) lock to be able to propose?
 	// type UserProposeFee: Get<BalanceOf<Self>>;
+
+	/// How many proposals can be submitted per proposal round? (required for weight calculation)
+	type ProposeCap: Get<u32>;
 	
 	/// How many proposals can an identified user submit per proposal round?
 	type ProposeIdentifiedUserCap: Get<u8>;
+
+	/// Which identity level is required to create a proposal?
+	type ProposeIdentityLevel: Get<u8>;
 
 	/// How high is the reward (%) for the proposer if the proposal is converted into a project?
 	type ProposeReward: Get<Permill>;
@@ -104,6 +138,9 @@ pub trait Trait: frame_system::Trait {
 	type ProposeVoteCorrectReward: Get<BalanceOf<Self>>;
 
 	/// Part 2.1: Concern state configuration
+	/// How many concerns can be submitted per concern round? (required for weight calculation)
+	type ConcernCap: Get<u32>;
+
 	/// How many concerns can an identified user submit per concern round?
 	type ConcernIdentifiedUserCap: Get<u8>;
 
@@ -149,7 +186,18 @@ decl_storage! {
 		// add_extra_genesis won't be called at all (1. Nov 2020)
 		pub State get(fn state) config(): States = States::Uninitialized;
 
+		/// BlockNumber for which the next state transit is scheduled
 		pub NextTransit get(fn next_transit): T::BlockNumber;
+
+		/// Identity -> Proposals
+		pub Proposals get(fn proposals): map hasher(identity) IdentityId<T> => Vec<Proposal>;
+		// List of current proposals
+		// pub Proposers get(fn proposers): Vec<IdentityId<T>>;
+		// Total votes
+		pub Votes get(fn votes): u32 = 0;
+		// Total proposals
+		pub ProposalCount get(fn proposal_count): u32 = 0;
+			
 	}
 	add_extra_genesis {
 		build(|_| {
@@ -165,8 +213,23 @@ decl_event! {
 	}
 }
 
+decl_error! {
+	pub enum Error for Module<T: Trait> {
+		/// Unable to add proposal because the proposal limit is reached.
+		ProposalLimitReached,
+		/// Identity level too low.
+		IdentityLevelTooLow,
+		/// User submitted too many proposals.
+		UserProposalLimitReached,
+		/// The operation requested cannot be executed because the pallet is in the wrong state.
+		WrongState,
+	}
+}
+
 decl_module! {
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
+		type Error = Error<T>;
+
 		fn deposit_event() = default;
 
 		// Fetch configuration
@@ -177,9 +240,15 @@ decl_module! {
 		// Part 1.1: Proposal state configuration
 		// How many (slashable) funds must a simple User (no identity) lock to be able to propose?
 		// const UserProposeFee: BalanceOf<T> = T::UserProposeFee::get();
+
+		/// How many proposals can be submitted per proposal round? (required for weight calculation)
+		const ProposeCap: u32 = T::ProposeCap::get() as u32;
 		
 		/// How many proposals can an identified user submit per proposal round?
 		const ProposeIdentifiedUserCap: u8 = T::ProposeIdentifiedUserCap::get() as u8;
+
+		/// Which identity level is required to create a proposal?
+		const ProposeIdentityLevel: u8 = T::ProposeIdentifiedUserCap::get() as u8;
 
 		/// How high is the reward (%) for the proposer if the proposal is converted into a project?
 		const ProposeReward: Permill = T::ProposeReward::get();
@@ -202,6 +271,9 @@ decl_module! {
 
 		/// How high is the reward if a proposal that the user voted for passes into next round?
 		const ProposeVoteCorrectReward: BalanceOf<T> = T::ProposeVoteCorrectReward::get();
+
+		/// How many concerns can be submitted per concern round? (required for weight calculation)
+		const ConcernCap: u32 = T::ConcernCap::get() as u32;
 
 		// Part 2.1: Concern state configuration
 		/// How many concerns can an identified user submit per concern round?
@@ -267,16 +339,61 @@ decl_module! {
 			ensure_root(origin)?;
 			Self::do_state_transit()
 		}
+
+		#[weight = 10_000 + T::DbWeight::get().reads_writes(6,2)]
+		/// As an identified user, submit a proposal
+		fn propose(origin, proposal: ProposalCID) {
+			let caller = ensure_signed(origin)?;
+			// Ensure that the pallet is in the appropriate state
+			ensure!(<State>::get() == States::Propose, Error::<T>::WrongState);
+			// Ensure that the maximum proposal count was not reached yet
+			ensure!(<ProposalCount>::get() < T::ProposeCap::get(), Error::<T>::ProposalLimitReached);
+			// Ensure the identity level is high enough to propose.
+			let id: IdentityId<T> = T::Identity::get_identity_id(&caller);
+			ensure!(T::Identity::get_identity_level(&id) >= T::ProposeIdentityLevel::get(),
+					Error::<T>::IdentityLevelTooLow
+			);
+			// Ensure the user has not surpassed the proposal limit per user
+			ensure!(<Proposals<T>>::get(&id).len() < T::ProposeIdentifiedUserCap::get().into(),
+					Error::<T>::UserProposalLimitReached
+			);
+			ensure!(<Proposals<T>>::iter() != Vec::new(), Error::<T>::UserProposalLimitReached);
+			Self::add_proposal(id, proposal);
+		}
+
+		/*
+		#[weight = 10_000]
+		fn test_identity_level(origin) {
+			let caller = ensure_signed(origin)?;
+			let identity: IdentityId<T> = caller;
+			let identity_level : IdentityLevel = 0;
+			let level: IdentityLevel = T::Identity::get_identity_level(identity).unwrap_or(identity_level);
+			debug::info!("IdentityLevel: {:?}", level);
+		}*/
 	}
 }
 
 impl<T: Trait> Module<T> {
+	fn add_proposal(id: IdentityId<T>, proposal: ProposalCID) {
+		// Create propoer Proposal and add it to the users
+		let document = Proposal::new(proposal);
+		<Proposals<T>>::mutate(id, |user_proposals| {
+			user_proposals.push(document);
+		});
+		// Increment total proposal count
+		<ProposalCount>::mutate(|pc| *pc +=1);
+	}
+
+	/// Execute the state transit and schedule the next state transit
 	fn do_state_transit() -> DispatchResult {
 		let mut transit_time: T::BlockNumber = T::BlockNumber::from(0);
 
 		// TODO: Check if there are proposals.
+		// TODO: Early state transit when the proposal limit was reached.
 		// TODO: Early state transition when every member of the council has voted.
 		// TODO: Make Scheduler named and cancel any scheduled state transits before adding new.
+		// TODO: Change mutate to get, checks values, and change them at the end of this function
+		//			(verify first write last)
 		let newstate: States = <State>::mutate(|state| {
 			match state {
 				States::Uninitialized => {
@@ -284,8 +401,12 @@ impl<T: Trait> Module<T> {
 					transit_time = T::ProposeRoundDuration::get();
 				},
 				States::Propose => {
-					*state = States::VotePropose;
-					transit_time = T::ProposeVoteDuration::get();
+					// Only transit state if proposals exist
+					transit_time = T::ProposeRoundDuration::get();
+					for _ in <Proposals<T>>::iter() {
+						transit_time = T::ProposeVoteDuration::get();
+						break;
+					}
 				},
 				States::VotePropose => {
 					*state = States::Concern;
@@ -324,5 +445,9 @@ impl<T: Trait> Module<T> {
 		NextTransit::<T>::put(next_state_transit);
 		Self::deposit_event(Event::StateRotated(newstate));
 		Ok(())
+	}
+
+	fn propose_to_vote_propose(state: u32) {
+		
 	}
 }

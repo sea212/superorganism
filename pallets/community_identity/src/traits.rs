@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#![cfg_attr(not(feature = "std"), no_std)]
 use frame_support::dispatch::{Codec, Decode, DispatchError, Encode, EncodeLike, fmt::Debug};
 use num_traits::Num;
 
@@ -47,5 +46,7 @@ pub trait PeerReviewedPhysicalIdentity<ProofData>
 	/// As a reviewer, reject a reviewed PhysicalIdentity
 	fn reject_identity(review_process: Self::Ticket) -> Result<(), DispatchError>;
 	/// Receive the identity level of a specific PhysicalIdentity.
-	fn get_identity_level(identity: Self::IdentityId) -> Option<Self::IdentityLevel>;
+	fn get_identity_level(identity: &Self::IdentityId) -> Self::IdentityLevel;
+	/// Get IdentityId for an address
+	fn get_identity_id(address: &Self::Address) -> Self::IdentityId;
 }

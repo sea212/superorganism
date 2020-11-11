@@ -23,68 +23,30 @@ use frame_support::{decl_error, decl_module, decl_storage, decl_event, Parameter
 	traits::{Get, Currency, ReservableCurrency,
 		schedule::{Anon, DispatchTime, LOWEST_PRIORITY},
 	},
+	sp_std::collections::vec_deque::VecDeque,
 	//weights::Weight,
 };
 use frame_system::{ensure_root, ensure_signed, RawOrigin::Root};
 // use frame_system;
-use codec::{Codec, Decode, Encode};
+use codec::Codec;
 // Fixed point arithmetic
 use sp_arithmetic::Permill;
 // Identity pallet
 use pallet_community_identity::{ProofType, IdentityId, IdentityLevel, traits::PeerReviewedPhysicalIdentity};
-#[cfg(feature = "std")]
-use frame_support::serde::{Deserialize, Serialize};
+// Custom types
+use crate::types::{Proposal, ProposalCID, ProposalWinner, States};
+pub mod types;
 #[cfg(test)]
 mod mock;
 #[cfg(test)]
 mod tests;
 
 type BalanceOf<T> = <<T as Trait>::Currency as Currency<<T as frame_system::Trait>::AccountId>>::Balance;
-// Important: Change Vec<u8> to a fixed length hash (otherwise attackable)
-type ProposalCID = Vec<u8>;
-
-/// Contains proposals and votes per proposal from a specific identity
-#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
-#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
-pub struct Proposal {
-	proposal: ProposalCID,
-	votes: u32,
-}
-
-impl Proposal {
-	fn new(proposal: ProposalCID) -> Self {
-		Proposal{proposal, votes: 0}
-	}
-}
-
-impl Default for Proposal {
-	fn default() -> Self {
-		Proposal::new(Vec::new())
-	}
-}
-
-/// Contains the five different states the pallet can be in
-#[derive(Copy, Clone, Debug, Decode, Encode, Eq, PartialEq)]
-#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
-pub enum States {
-	Uninitialized,
-	Propose,
-	VotePropose,
-	Concern,
-	VoteConcern,
-	VoteCouncil,
-}
-
-impl Default for States {
-    fn default() -> Self {
-        States::Uninitialized
-    }
-}
 
 /// Configure the pallet by specifying the parameters and types on which it depends.
 pub trait Trait: frame_system::Trait {
 	// Type trait constraints
-	type Event: From<Event> + Into<<Self as frame_system::Trait>::Event>;
+	type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
 
 	type Currency: ReservableCurrency<Self::AccountId>;
 
@@ -129,7 +91,7 @@ pub trait Trait: frame_system::Trait {
 	type ProposeVoteDuration: Get<Self::BlockNumber>;
 
 	/// Which identity level (number of random verifications) is required to vote?
-	type ProposeVoteIdentityLevel: Get<u16>;
+	type ProposeVoteIdentityLevel: Get<u8>;
 
 	/// How many votes can each identified user (with an appropriate identity level) submit?
 	type ProposeVoteMaxPerIdentifiedUser: Get<u16>;
@@ -161,7 +123,7 @@ pub trait Trait: frame_system::Trait {
 	type ConcernVoteDuration: Get<Self::BlockNumber>;
 
 	/// Which identity level (number of random verifications) is required to vote?
-	type ConcernVoteIdentityLevel: Get<u16>;
+	type ConcernVoteIdentityLevel: Get<u8>;
 
 	/// How many votes can each identified user (with an appropriate identity level) submit?
 	type ConcernVoteMaxPerIdentifiedUser: Get<u16>;
@@ -178,6 +140,7 @@ pub trait Trait: frame_system::Trait {
 	type CouncilAcceptConcernMinVotes: Get<Permill>;
 }
 
+// TODO: Remove pub storage and write getters
 decl_storage! {
 	trait Store for Module<T: Trait> as Proposal {
 		/// The current proposal state
@@ -187,17 +150,28 @@ decl_storage! {
 		pub State get(fn state) config(): States = States::Uninitialized;
 
 		/// BlockNumber for which the next state transit is scheduled
-		pub NextTransit get(fn next_transit): T::BlockNumber;
-
+		pub NextTransit get(fn next_transit): T::BlockNumber = T::BlockNumber::from(0);
 		/// Identity -> Proposals
-		pub Proposals get(fn proposals): map hasher(identity) IdentityId<T> => Vec<Proposal>;
-		// List of current proposals
-		// pub Proposers get(fn proposers): Vec<IdentityId<T>>;
-		// Total votes
-		pub Votes get(fn votes): u32 = 0;
-		// Total proposals
+		pub Proposals get(fn proposals): map hasher(identity)
+			IdentityId<T> => Vec<Proposal> = Vec::new();
+		/// Proposal -> Identity
+		pub ProposalToIdentity get(fn proposal_to_identity): map hasher(identity)
+			ProposalCID => IdentityId<T> = IdentityId::<T>::default();
+		/// Identity -> Votes (we have to keep track of the CIDs to reward the user)
+		pub ProposalVotes get(fn votes): map hasher(identity)
+			IdentityId<T> => Vec<ProposalCID> = Vec::new();
+		/// Total votes
+		pub VoteCount get(fn vote_count): u32 = 0;
+		/// Total proposals
 		pub ProposalCount get(fn proposal_count): u32 = 0;
-			
+		/// Current round
+		// decided for u8 because after 256 proposal rounds the old proposals should be converted
+		// into projects already. In addition, the blockchain state can be inspected at any block.
+		// Last, There is no gurantee that the proposals still exist in decentralized storage.
+		pub Round get(fn round): u8 = 0;
+		/// Proposal winner for specific round
+		pub ProposalWinners get(fn proposal_winners): map hasher(identity)
+			u8 => VecDeque<ProposalWinner<T>> = VecDeque::new();
 	}
 	add_extra_genesis {
 		build(|_| {
@@ -207,20 +181,28 @@ decl_storage! {
 }
 
 decl_event! {
-	pub enum Event {
+	pub enum Event<T> where Balance = BalanceOf<T> {
 		/// Rotated to the next state. \[NewState\]
 		StateRotated(States),
+		/// Total issued rewards for correct ovtes \[Balance\]
+		TotalVoteReward(Balance),
 	}
 }
 
 decl_error! {
 	pub enum Error for Module<T: Trait> {
-		/// Unable to add proposal because the proposal limit is reached.
-		ProposalLimitReached,
 		/// Identity level too low.
 		IdentityLevelTooLow,
+		/// Proposal was already submitted by another person
+		ProposalAlreadySubmitted,
+		/// Proposal does not exist
+		ProposalNotExistant,
+		/// Unable to add proposal because the proposal limit is reached.
+		ProposalLimitReached,
 		/// User submitted too many proposals.
 		UserProposalLimitReached,
+		/// User voted too many times.
+		UserProposalVoteLimitReached,
 		/// The operation requested cannot be executed because the pallet is in the wrong state.
 		WrongState,
 	}
@@ -258,13 +240,13 @@ decl_module! {
 
 		// Part 1.2: Proposal voting state configuration
 		/// How many votes (%) does a proposal require to be accepted for the next round?
-		// const ProposeVoteAcceptanceMin: Permill = T::ProposeVoteAcceptanceMin::get() as Permill;
+		const ProposeVoteAcceptanceMin: Permill = T::ProposeVoteAcceptanceMin::get() as Permill;
 
 		/// How long can votes for proposals be submitted?
 		const ProposeVoteDuration: T::BlockNumber = T::ProposeVoteDuration::get();
 
 		/// Which identity level (number of random verifications) is required to vote?
-		const ProposeVoteIdentityLevel: u16 = T::ProposeVoteIdentityLevel::get() as u16;
+		const ProposeVoteIdentityLevel: u8 = T::ProposeVoteIdentityLevel::get() as u8;
 
 		/// How many votes can each identified user (with an appropriate identity level) submit?
 		const ProposeVoteMaxPerIdentifiedUser: u16 = T::ProposeVoteMaxPerIdentifiedUser::get() as u16;
@@ -290,13 +272,13 @@ decl_module! {
 
 		// Part 2.2: Concern voting state configuration
 		/// How many votes (%) does a concern require to be accepted for the next round?
-		// const ConcernVoteAcceptanceMin: Permill = T::ConcernVoteAcceptanceMin::get() as Permill;
+		const ConcernVoteAcceptanceMin: Permill = T::ConcernVoteAcceptanceMin::get() as Permill;
 
 		/// How long can votes for concerns be submitted?
 		const ConcernVoteDuration: T::BlockNumber = T::ConcernVoteDuration::get();
 
 		/// Which identity level (number of random verifications) is required to vote?
-		const ConcernVoteIdentityLevel: u16 = T::ConcernVoteIdentityLevel::get() as u16;
+		const ConcernVoteIdentityLevel: u8 = T::ConcernVoteIdentityLevel::get() as u8;
 
 		/// How many votes can each identified user (with an appropriate identity level) submit?
 		const ConcernVoteMaxPerIdentifiedUser: u16 = T::ConcernVoteMaxPerIdentifiedUser::get() as u16;
@@ -318,9 +300,6 @@ decl_module! {
 		// 1. This function is called before the runtime state is initialized, therefore
 		// 	  we don't have access to the current block number. This means that we we cannot
 		//    figure out when the scheduler should transit into the next state in do_state_transit() (31. Oct 2020)
-		// 2. This function might be called multiple times during the upgrade process. When using
-		//	  an anonymous scheduler (like currently - 31. Oct 2020), multiple calls are scheduled.
-		//	  It might be necessary to switch to a named scheduler.
 		/*
 		fn on_runtime_upgrade() -> Weight {
 			if let States::Uninitialized = <State>::get() {
@@ -331,34 +310,63 @@ decl_module! {
 		}*/
 
 		
-		#[weight = 10_000 + T::DbWeight::get().reads_writes(1,1)]
 		/// Enforce state transit
 		// Only for test purposes. Will be deleted in the future.
+		#[weight = 10_000 + T::DbWeight::get().reads_writes(1,1)]
 		fn state_transit(origin) -> DispatchResult {
 			// check and change the current state
 			ensure_root(origin)?;
 			Self::do_state_transit()
 		}
 
-		#[weight = 10_000 + T::DbWeight::get().reads_writes(6,2)]
+
 		/// As an identified user, submit a proposal
+		#[weight = 10_000 + T::DbWeight::get().reads_writes(6,3)]
 		fn propose(origin, proposal: ProposalCID) {
 			let caller = ensure_signed(origin)?;
 			// Ensure that the pallet is in the appropriate state
 			ensure!(<State>::get() == States::Propose, Error::<T>::WrongState);
 			// Ensure that the maximum proposal count was not reached yet
-			ensure!(<ProposalCount>::get() < T::ProposeCap::get(), Error::<T>::ProposalLimitReached);
+			ensure!(<ProposalCount>::get() < T::ProposeCap::get().into(), Error::<T>::ProposalLimitReached);
 			// Ensure the identity level is high enough to propose.
 			let id: IdentityId<T> = T::Identity::get_identity_id(&caller);
-			ensure!(T::Identity::get_identity_level(&id) >= T::ProposeIdentityLevel::get(),
+			ensure!(T::Identity::get_identity_level(&id) >= T::ProposeIdentityLevel::get().into(),
 					Error::<T>::IdentityLevelTooLow
 			);
 			// Ensure the user has not surpassed the proposal limit per user
 			ensure!(<Proposals<T>>::get(&id).len() < T::ProposeIdentifiedUserCap::get().into(),
 					Error::<T>::UserProposalLimitReached
 			);
-			ensure!(<Proposals<T>>::iter() != Vec::new(), Error::<T>::UserProposalLimitReached);
+			// Ensure that the proposal was not already submitted
+			ensure!(<ProposalToIdentity<T>>::get(&proposal) == IdentityId::<T>::default(),
+					Error::<T>::ProposalAlreadySubmitted
+			);
 			Self::add_proposal(id, proposal);
+		}
+
+		/// As an identified user, vote for a proposal
+		#[weight = 10_000 + T::DbWeight::get().reads_writes(6,3)]
+		fn vote_proposal(origin, proposal: ProposalCID) {
+			let caller = ensure_signed(origin)?;
+			// Ensure that the pallet is in the appropriate state
+			ensure!(<State>::get() == States::VotePropose, Error::<T>::WrongState);
+			// Ensure that the proposal exists
+			let proposer: IdentityId<T> = <ProposalToIdentity<T>>::get(&proposal);
+			ensure!(proposer != IdentityId::<T>::default(),
+				Error::<T>::ProposalNotExistant
+			);
+			// Ensure the identity level is high enough to vote.
+			let id: IdentityId<T> = T::Identity::get_identity_id(&caller);
+			ensure!(T::Identity::get_identity_level(&id) >= T::ProposeVoteIdentityLevel::get().into(),
+					Error::<T>::IdentityLevelTooLow
+			);
+			// Ensure the user has not surpassed the vote limit per user
+			ensure!(<ProposalVotes<T>>::get(&id).len() < T::ProposeVoteMaxPerIdentifiedUser::get().into(),
+					Error::<T>::UserProposalVoteLimitReached
+			);
+
+			// Optional: Ensure that the user did not already vote for the proposal (design decision)
+			Self::add_vote_proposal(id, proposal, proposer);
 		}
 
 		/*
@@ -374,21 +382,41 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
+	/// Add proposal to storage and update relevant storage values
 	fn add_proposal(id: IdentityId<T>, proposal: ProposalCID) {
 		// Create propoer Proposal and add it to the users
-		let document = Proposal::new(proposal);
-		<Proposals<T>>::mutate(id, |user_proposals| {
+		let document = Proposal::new(proposal.clone());
+		<Proposals<T>>::mutate(&id, |user_proposals| {
 			user_proposals.push(document);
 		});
+		// Add mapping from proposalCID to identity
+		ProposalToIdentity::<T>::insert(&proposal, &id);
 		// Increment total proposal count
-		<ProposalCount>::mutate(|pc| *pc +=1);
+		<ProposalCount>::mutate(|pc| *pc += 1);
+	}
+
+	/// Add vote to storage and update relevant storage values
+	fn add_vote_proposal(id: IdentityId<T>, proposal: ProposalCID, proposer: IdentityId<T>) {
+		// Add proposalCID to id votes
+		<ProposalVotes<T>>::mutate(&id, |vote_cids| {
+			vote_cids.push(proposal.clone())
+		});
+		// Increment vote count within Proposal structure
+		<Proposals<T>>::mutate(&proposer, |proposals| {
+			if let Some(p) = proposals.iter_mut().find(|el| el.proposal == proposal) {
+				p.votes += 1;
+			}
+			// TODO: Better error handling. What if storage got corrupted somehow?
+		});
+		// Increment total vote count
+		// TODO: Overflow handling
+		<VoteCount>::mutate(|vc| *vc += 1);
 	}
 
 	/// Execute the state transit and schedule the next state transit
 	fn do_state_transit() -> DispatchResult {
 		let mut transit_time: T::BlockNumber = T::BlockNumber::from(0);
 
-		// TODO: Check if there are proposals.
 		// TODO: Early state transit when the proposal limit was reached.
 		// TODO: Early state transition when every member of the council has voted.
 		// TODO: Make Scheduler named and cancel any scheduled state transits before adding new.
@@ -405,10 +433,12 @@ impl<T: Trait> Module<T> {
 					transit_time = T::ProposeRoundDuration::get();
 					for _ in <Proposals<T>>::iter() {
 						transit_time = T::ProposeVoteDuration::get();
+						*state = States::VotePropose;
 						break;
 					}
 				},
 				States::VotePropose => {
+					Self::evaluate_proposal_votes();
 					*state = States::Concern;
 					transit_time = T::ConcernRoundDuration::get();
 				},
@@ -443,11 +473,63 @@ impl<T: Trait> Module<T> {
 		};
 
 		NextTransit::<T>::put(next_state_transit);
-		Self::deposit_event(Event::StateRotated(newstate));
+		Self::deposit_event(Event::<T>::StateRotated(newstate));
 		Ok(())
 	}
 
-	fn propose_to_vote_propose(state: u32) {
-		
+	/// On state transit to VotePropose, evaluate all proposals and votes and pay correct voters.
+	fn evaluate_proposal_votes() {
+		// Drain all Proposals and put winners into winner variable and into storage ProposalWinners
+		let total_votes: u32 = <VoteCount>::get();
+		let round: u8 = <Round>::get();
+		let mut winners: Vec<ProposalWinner<T>> = Vec::new();
+		let mut total_reward_issued = BalanceOf::<T>::from(0);
+		let reward: BalanceOf<T> = T::ProposeVoteCorrectReward::get();
+
+		for (id, proposals) in <Proposals<T>>::drain() {
+			for proposal in proposals.iter() {
+				// Here we inspect every single proposal of a specific user. Add it if it won.
+				let vote_ratio = Permill::from_rational_approximation(proposal.votes, total_votes);
+
+				if vote_ratio >= T::ProposeVoteAcceptanceMin::get() {
+					let document = ProposalWinner::<T>::new(id.clone(), proposal.proposal.clone(), vote_ratio);
+					winners.push(document);
+				}
+			}
+		}
+
+		winners.sort_by(|a, b| a.vote_ratio.cmp(&b.vote_ratio));
+		ProposalWinners::<T>::insert(round, VecDeque::from(winners.clone()));
+		// Drain all voters ProposalVotes and reward them if the proposal they voted for won
+		for (id, votes) in <ProposalVotes<T>>::drain() {
+			for _ in votes.iter().filter(|v| {
+				// Only count votes for winning proposals
+				for winner in winners.iter() {
+					if winner.proposal == **v {
+						return true;
+					}
+				}
+				false
+			}) {
+				// TODO: When tx by identity is implemented, change to deposit_creating
+				// (since identity does not require to spend fees for tx,
+				// the account might not have been created on chain)
+				T::Currency::deposit_into_existing(&T::Identity::get_address(&id), reward);
+				total_reward_issued += reward;
+			}
+		}
+		// Clear ProposalToIdentity, VoteCount, ProposalCount
+		// Avoid collecting the iterator to avoid creating a new Vector
+		ProposalToIdentity::<T>::drain().nth(usize::MAX);
+		VoteCount::put(0);
+		ProposalCount::put(0);
+		Self::deposit_event(Event::<T>::TotalVoteReward(total_reward_issued));
 	}
 }
+
+/*
+pub struct ProposalWinner<T: Trait> {
+	pub proposer: IdentityId<T>, // For later rewards
+	pub proposal: ProposalCID,
+	pub votes_ratio: Permill
+}*/

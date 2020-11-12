@@ -22,8 +22,9 @@ use crate::Permill;
 
 // Important: Change Vec<u8> to a fixed length type (otherwise attackable)
 pub type ProposalCID = Vec<u8>;
+pub type ConcernCID = ProposalCID;
 
-/// Contains proposals and votes per proposal from a specific identity
+/// Contains proposal and vote count
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct Proposal {
@@ -39,7 +40,28 @@ impl Proposal {
 
 impl Default for Proposal {
 	fn default() -> Self {
-		Proposal::new(Vec::new())
+		Proposal::new(ProposalCID::default())
+	}
+}
+
+/// Contains concern and vote count
+#[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
+#[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
+pub struct Concern {
+	pub concern: ConcernCID,
+	pub associated_proposal: ProposalCID,
+	pub votes: u32,
+}
+
+impl Concern {
+	pub fn new(concern: ConcernCID, associated_proposal: ProposalCID) -> Self {
+		Concern{concern, associated_proposal, votes: 0}
+	}
+}
+
+impl Default for Concern {
+	fn default() -> Self {
+		Concern::new(ConcernCID::default(), ProposalCID::default())
 	}
 }
 

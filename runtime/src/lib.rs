@@ -319,6 +319,8 @@ parameter_types! {
 	pub const ConcernCap: u32 = 1_000;
 	/// How many concerns can an identified user submit per concern round?
 	pub const ConcernIdentifiedUserCap: u8 = 1;
+	/// Which identity level is required to submit a concern?
+	pub const ConcernIdentityLevel: u8 = 2;
 	/// How high is the reward if the concern receives enough votes to be passed to the next state?
 	pub const ConcernReward: Balance = 1_000_000;
 	/// How long can concerns be submitted? Value in blocks.
@@ -370,6 +372,7 @@ impl pallet_proposal::Trait for Runtime {
 	type ProposeVoteCorrectReward = ProposeVoteCorrectReward;
 	type ConcernCap = ConcernCap;
 	type ConcernIdentifiedUserCap = ConcernIdentifiedUserCap;
+	type ConcernIdentityLevel = ConcernIdentityLevel;
 	type ConcernReward = ConcernReward;
 	type ConcernRoundDuration = ConcernRoundDuration;
 	// type UserConcernFee = UserConcernFee;

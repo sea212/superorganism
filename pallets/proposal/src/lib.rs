@@ -34,7 +34,7 @@ use sp_arithmetic::Permill;
 // Identity pallet
 use pallet_community_identity::{ProofType, IdentityId, IdentityLevel, traits::PeerReviewedPhysicalIdentity};
 // Custom types
-use crate::types::{Proposal, ProposalCID, ProposalWinner, States};
+use crate::types::{Concern, ConcernCID, Proposal, ProposalCID, ProposalWinner, States};
 pub mod types;
 #[cfg(test)]
 mod mock;
@@ -106,6 +106,9 @@ pub trait Trait: frame_system::Trait {
 	/// How many concerns can an identified user submit per concern round?
 	type ConcernIdentifiedUserCap: Get<u8>;
 
+	/// Which identity level is required to submit a concern?
+	type ConcernIdentityLevel: Get<u8>;
+
 	/// How high is the reward if the concern receives enough votes to be passed to the next state?
 	type ConcernReward: Get<BalanceOf<Self>>;
 
@@ -161,7 +164,7 @@ decl_storage! {
 		pub ProposalVotes get(fn votes): map hasher(identity)
 			IdentityId<T> => Vec<ProposalCID> = Vec::new();
 		/// Total votes
-		pub VoteCount get(fn vote_count): u32 = 0;
+		pub ProposalVoteCount get(fn vote_count): u32 = 0;
 		/// Total proposals
 		pub ProposalCount get(fn proposal_count): u32 = 0;
 		/// Current round
@@ -172,6 +175,14 @@ decl_storage! {
 		/// Proposal winner for specific round
 		pub ProposalWinners get(fn proposal_winners): map hasher(identity)
 			u8 => VecDeque<ProposalWinner<T>> = VecDeque::new();
+		/// Identity -> Concerns
+		pub Concerns get(fn concerns): map hasher(identity)
+			IdentityId<T> => Vec<Concern> = Vec::new();
+		/// ConcernCID -> Identity
+		pub ConcernToIdentity get(fn concern_to_identity): map hasher(identity)
+			(ConcernCID, ProposalCID) => IdentityId<T> = IdentityId::<T>::default();
+		/// Total Concerns
+		pub ConcernCount get(fn concern_count): u32 = 0;
 	}
 	add_extra_genesis {
 		build(|_| {
@@ -191,6 +202,10 @@ decl_event! {
 
 decl_error! {
 	pub enum Error for Module<T: Trait> {
+		/// Concern was already submitted by another person
+		ConcernAlreadySubmitted,
+		/// Unable to add proposal because the concern limit is reached.
+		ConcernLimitReached,
 		/// Identity level too low.
 		IdentityLevelTooLow,
 		/// Proposal was already submitted by another person
@@ -201,6 +216,8 @@ decl_error! {
 		ProposalLimitReached,
 		/// User submitted too many proposals.
 		UserProposalLimitReached,
+		/// User submitted too many concerns.
+		UserConcernLimitReached,
 		/// User voted too many times.
 		UserProposalVoteLimitReached,
 		/// The operation requested cannot be executed because the pallet is in the wrong state.
@@ -214,6 +231,7 @@ decl_module! {
 
 		fn deposit_event() = default;
 
+		// TODO: Think about how to handle arbitrarily huge number of votes
 		// Fetch configuration
 		/// How long is an identified user locked out from submitting proposals / concerns
 		/// for bad behaviour. Value in seconds.
@@ -260,6 +278,9 @@ decl_module! {
 		// Part 2.1: Concern state configuration
 		/// How many concerns can an identified user submit per concern round?
 		const ConcernIdentifiedUserCap: u8 = T::ConcernIdentifiedUserCap::get() as u8;
+
+		/// Which identity level is required to submit a concern?
+		const ConcernIdentityLevel: u8 = T::ConcernIdentityLevel::get() as u8;
 
 		/// How high is the reward if the concern receives enough votes to be passed to the next state?
 		const ConcernReward: BalanceOf<T> = T::ConcernReward::get();
@@ -312,11 +333,36 @@ decl_module! {
 		
 		/// Enforce state transit
 		// Only for test purposes. Will be deleted in the future.
-		#[weight = 10_000 + T::DbWeight::get().reads_writes(1,1)]
+		#[weight = 10_000 + T::DbWeight::get().reads_writes(5000,3)]
 		fn state_transit(origin) -> DispatchResult {
 			// check and change the current state
 			ensure_root(origin)?;
 			Self::do_state_transit()
+		}
+
+
+		/// As an identified user, submit a concern
+		#[weight = 10_000 + T::DbWeight::get().reads_writes(6,3)]
+		fn concern(origin, concern: ConcernCID, proposal: ProposalCID) {
+			let caller = ensure_signed(origin)?;
+			// Ensure that the pallet is in the appropriate state
+			ensure!(<State>::get() == States::Concern, Error::<T>::WrongState);
+			// Ensure that the maximum concern count was not reached yet
+			ensure!(<ConcernCount>::get() < T::ConcernCap::get().into(), Error::<T>::ConcernLimitReached);
+			// Ensure the identity level is high enough to submit a concern.
+			let id: IdentityId<T> = T::Identity::get_identity_id(&caller);
+			ensure!(T::Identity::get_identity_level(&id) >= T::ConcernIdentityLevel::get().into(),
+					Error::<T>::IdentityLevelTooLow
+			);
+			// Ensure the user has not surpassed the concern limit per user
+			ensure!(<Concerns<T>>::get(&id).len() < T::ConcernIdentifiedUserCap::get().into(),
+					Error::<T>::UserConcernLimitReached
+			);
+			// Ensure that the concern was not already submitted
+			ensure!(<ConcernToIdentity<T>>::get((&concern, &proposal)) == IdentityId::<T>::default(),
+					Error::<T>::ConcernAlreadySubmitted
+			);
+			Self::add_concern(id, concern, proposal);
 		}
 
 
@@ -382,9 +428,22 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
+	/// Add concern to storage and update relevant storage values
+	fn add_concern(id: IdentityId<T>, concern: ConcernCID, proposal: ProposalCID) {
+		// Create proper Concern and add it to the users list of concerns
+		let document = Concern::new(concern.clone(), proposal.clone());
+		<Concerns<T>>::mutate(&id, |user_concerns| {
+			user_concerns.push(document);
+		});
+		// Add mapping from (ConcernCID, ProposalCid) to identity
+		ConcernToIdentity::<T>::insert((&concern, &proposal), &id);
+		// Increment total concern count
+		<ConcernCount>::mutate(|cc| *cc += 1);
+	}
+
 	/// Add proposal to storage and update relevant storage values
 	fn add_proposal(id: IdentityId<T>, proposal: ProposalCID) {
-		// Create propoer Proposal and add it to the users
+		// Create proper Proposal and add it to the users list of proposals
 		let document = Proposal::new(proposal.clone());
 		<Proposals<T>>::mutate(&id, |user_proposals| {
 			user_proposals.push(document);
@@ -410,7 +469,7 @@ impl<T: Trait> Module<T> {
 		});
 		// Increment total vote count
 		// TODO: Overflow handling
-		<VoteCount>::mutate(|vc| *vc += 1);
+		<ProposalVoteCount>::mutate(|vc| *vc += 1);
 	}
 
 	/// Execute the state transit and schedule the next state transit
@@ -439,12 +498,30 @@ impl<T: Trait> Module<T> {
 				},
 				States::VotePropose => {
 					Self::evaluate_proposal_votes();
+					let round = <Round>::get();
+
+					// Start next proposal round if no proposal did receive enough votes
+					if <ProposalWinners<T>>::get(round).len() == 0 {
+						*state = States::Propose;
+						transit_time = T::ProposeRoundDuration::get();
+						if round == u8::MAX { Round::put(0); }
+						else { Round::put(round+1); }
+						return *state;
+					}
+
 					*state = States::Concern;
 					transit_time = T::ConcernRoundDuration::get();
 				},
 				States::Concern => {
-					*state = States::VoteConcern;
-					transit_time = T::ConcernVoteDuration::get();
+					// Skip VoteConcern if no concerns exist
+					if <ConcernCount>::get() == 0 {
+						*state = States::VoteCouncil;
+						transit_time = T::CouncilVoteRoundDuration::get();
+					} else {
+						transit_time = T::ConcernVoteDuration::get();
+						*state = States::VoteConcern;
+						return *state;
+					}
 				},
 				States::VoteConcern => {
 					*state = States::VoteCouncil;
@@ -479,13 +556,13 @@ impl<T: Trait> Module<T> {
 
 	/// On state transit to VotePropose, evaluate all proposals and votes and pay correct voters.
 	fn evaluate_proposal_votes() {
-		// Drain all Proposals and put winners into winner variable and into storage ProposalWinners
-		let total_votes: u32 = <VoteCount>::get();
+		let total_votes: u32 = <ProposalVoteCount>::get();
 		let round: u8 = <Round>::get();
 		let mut winners: Vec<ProposalWinner<T>> = Vec::new();
 		let mut total_reward_issued = BalanceOf::<T>::from(0);
 		let reward: BalanceOf<T> = T::ProposeVoteCorrectReward::get();
 
+		// Drain all Proposals and put winners into winner variable and into storage ProposalWinners
 		for (id, proposals) in <Proposals<T>>::drain() {
 			for proposal in proposals.iter() {
 				// Here we inspect every single proposal of a specific user. Add it if it won.
@@ -514,22 +591,26 @@ impl<T: Trait> Module<T> {
 				// TODO: When tx by identity is implemented, change to deposit_creating
 				// (since identity does not require to spend fees for tx,
 				// the account might not have been created on chain)
-				T::Currency::deposit_into_existing(&T::Identity::get_address(&id), reward);
-				total_reward_issued += reward;
+				// TODO: Error handling
+				if T::Currency::deposit_into_existing(&T::Identity::get_address(&id), reward).is_ok() {
+					total_reward_issued += reward;
+				}
 			}
 		}
-		// Clear ProposalToIdentity, VoteCount, ProposalCount
+
+		// Clear ProposalToIdentity, ProposalVoteCount, ProposalCount
 		// Avoid collecting the iterator to avoid creating a new Vector
 		ProposalToIdentity::<T>::drain().nth(usize::MAX);
-		VoteCount::put(0);
+		ProposalVoteCount::put(0);
 		ProposalCount::put(0);
 		Self::deposit_event(Event::<T>::TotalVoteReward(total_reward_issued));
 	}
-}
 
-/*
-pub struct ProposalWinner<T: Trait> {
-	pub proposer: IdentityId<T>, // For later rewards
-	pub proposal: ProposalCID,
-	pub votes_ratio: Permill
-}*/
+	/*
+	fn incr_round() {
+		<Round>::mutate(|r| {
+			if *r == u8::MAX { *r = 0; }
+			else { *r += 1; }
+		});
+	}*/
+}

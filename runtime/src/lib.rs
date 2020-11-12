@@ -292,7 +292,7 @@ parameter_types! {
 	pub const IdentifiedUserPenality: u32 = TwoYears::get();
 	/// Part 1.1: Proposal state configuration
 	// How many (slashable) funds must a simple User (no identity) lock to be able to propose?
-	// pub const UserProposeFee : Balance = 1_000_000_000_000
+	// pub const UserProposeFee : Balance = 100_000_000_000_000
 	/// How many proposals can be submitted per proposal round? (required for weight calculation)
 	pub const ProposeCap: u32 = 1_000;
 	/// How many proposals can an identified user submit per proposal round?
@@ -304,16 +304,16 @@ parameter_types! {
 	/// How long can proposals be submitted? Value in blocks.
 	pub const ProposeRoundDuration: BlockNumber = OneWeek::get();
 	/// Part 1.2: Proposal voting state configuration
-	/// How many votes (%) does a proposal require to be accepted for the next round?
+	/// How many votes (ratio) does a proposal require to be accepted for the next round?
 	pub const ProposeVoteAcceptanceMin: Permill = Permill::from_percent(10);
 	/// How long can votes for proposals be submitted? Value in blocks.
 	pub const ProposeVoteDuration: BlockNumber = OneWeek::get();
 	/// Which identity level (number of random verifications) is required to vote?
-	pub const ProposeVoteIdentityLevel: u16 = 3;
+	pub const ProposeVoteIdentityLevel: u8 = 3;
 	/// How many votes can each identified user (with an appropriate identity level) submit?
 	pub const ProposeVoteMaxPerIdentifiedUser: u16 = 3;
-	/// How high is the reward if a concern that the user voted for passes into next round?
-	pub const ProposeVoteCorrectReward: Balance = 10_000_000;
+	/// How high is the reward if a proposal that the user voted for passes into next round?
+	pub const ProposeVoteCorrectReward: Balance = 100_000_000_000;
 	/// Part 2.1: Concern state configuration
 	/// How many concerns can be submitted per concern round? (required for weight calculation)
 	pub const ConcernCap: u32 = 1_000;
@@ -324,18 +324,19 @@ parameter_types! {
 	/// How long can concerns be submitted? Value in blocks.
 	pub const ConcernRoundDuration: BlockNumber = OneWeek::get();
 	// How many (slashable) funds must a simple User (no identity) lock to be able to submit a concern?
-	// pub const UserConcernFee: Balance = 1_000_000_000_000;
+	// pub const UserConcernFee: Balance = 10_000_000_000_000;
+	/// How many votes (ratio) does a concern require to be accepted for the next round?
 	pub const ConcernVoteAcceptanceMin: Permill = Permill::from_percent(3);
 	/// Part 2.2: Concern voting state configuration
 	/// How many votes (%) does a concern require to be accepted for the next round?
 	/// How long can votes for concerns be submitted? Value in blocks.
 	pub const ConcernVoteDuration: BlockNumber = OneWeek::get();
 	/// Which identity level (number of random verifications) is required to vote?
-	pub const ConcernVoteIdentityLevel: u16 = 3;
+	pub const ConcernVoteIdentityLevel: u8 = 3;
 	/// How many votes can each identified user (with an appropriate identity level) submit?
 	pub const ConcernVoteMaxPerIdentifiedUser: u16 = 3;
 	/// How high is the reward if a concern that the user voted for passes into next round?
-	pub const ConcernVoteCorrectReward: Balance = 1_000_000;
+	pub const ConcernVoteCorrectReward: Balance = 10_000_000_000;
 	/// Part 3: Final evaluation of the winning proposals and associated concern by the council
 	/// How much time is reserved for the council to vote? Value in blocks.
 	pub const CouncilVoteRoundDuration: BlockNumber = OneWeek::get();
@@ -406,7 +407,7 @@ construct_runtime!(
 		Scheduler: pallet_scheduler::{Module, Call, Storage, Event<T>},
 		Sudo: pallet_sudo::{Module, Call, Config<T>, Storage, Event<T>},
 		// Custom pallets
-		Proposal: pallet_proposal::{Module, Call, Storage, Event, Config},
+		Proposal: pallet_proposal::{Module, Call, Storage, Event<T>, Config},
 		Project: pallet_project::{Module},
 		CommunityIdentity: pallet_community_identity::{Module, Call},
 	}

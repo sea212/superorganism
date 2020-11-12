@@ -113,6 +113,10 @@ impl<T: Trait> Module<T> {
 	fn do_get_identity_id(address: &T::AccountId) -> IdentityId<T> {
 		address.clone()
 	}
+
+	fn do_get_address(identity: &IdentityId<T>) -> T::AccountId {
+		identity.clone()
+	}
 }
 
 impl<T: Trait> traits::PeerReviewedPhysicalIdentity<ProofType> for Module<T> {
@@ -149,5 +153,10 @@ impl<T: Trait> traits::PeerReviewedPhysicalIdentity<ProofType> for Module<T> {
 	/// Get IdentityId for an address
 	fn get_identity_id(address: &Self::Address) -> Self::IdentityId {
 		Self::do_get_identity_id(address)
+	}
+
+	/// Get (main) address for an IdentityId
+	fn get_address(identity: &Self::IdentityId) -> Self::Address {
+		Self::do_get_address(identity)
 	}
 }

@@ -49,4 +49,6 @@ pub trait PeerReviewedPhysicalIdentity<ProofData>
 	fn get_identity_level(identity: &Self::IdentityId) -> Self::IdentityLevel;
 	/// Get IdentityId for an address
 	fn get_identity_id(address: &Self::Address) -> Self::IdentityId;
+	/// Get (main) address for an IdentityId
+	fn get_address(identity: &Self::IdentityId) -> Self::Address;
 }

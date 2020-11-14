@@ -322,7 +322,7 @@ parameter_types! {
 	/// Which identity level is required to submit a concern?
 	pub const ConcernIdentityLevel: u8 = 2;
 	/// How high is the reward if the concern receives enough votes to be passed to the next state?
-	pub const ConcernReward: Balance = 1_000_000;
+	pub const ConcernReward: Balance = 10_000_000_000_000;
 	/// How long can concerns be submitted? Value in blocks.
 	pub const ConcernRoundDuration: BlockNumber = OneWeek::get();
 	// How many (slashable) funds must a simple User (no identity) lock to be able to submit a concern?

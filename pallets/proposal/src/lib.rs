@@ -151,9 +151,14 @@ decl_storage! {
 		// the state machine cannot be initialized during genesis, because
 		// add_extra_genesis won't be called at all (1. Nov 2020)
 		pub State get(fn state) config(): States = States::Uninitialized;
-
 		/// BlockNumber for which the next state transit is scheduled
 		pub NextTransit get(fn next_transit): T::BlockNumber = T::BlockNumber::from(0);
+		/// Current round
+		// decided for u8 because after 256 proposal rounds the old proposals should be converted
+		// into projects already. In addition, the blockchain state can be inspected at any block.
+		// Last, There is no gurantee that the proposals still exist in decentralized storage.
+		pub Round get(fn round): u8 = 0;
+
 		/// Identity -> Proposals
 		pub Proposals get(fn proposals): map hasher(identity)
 			IdentityId<T> => Vec<Proposal> = Vec::new();
@@ -167,14 +172,10 @@ decl_storage! {
 		pub ProposalVoteCount get(fn vote_count): u32 = 0;
 		/// Total proposals
 		pub ProposalCount get(fn proposal_count): u32 = 0;
-		/// Current round
-		// decided for u8 because after 256 proposal rounds the old proposals should be converted
-		// into projects already. In addition, the blockchain state can be inspected at any block.
-		// Last, There is no gurantee that the proposals still exist in decentralized storage.
-		pub Round get(fn round): u8 = 0;
 		/// Proposal winner for specific round
 		pub ProposalWinners get(fn proposal_winners): map hasher(identity)
 			u8 => VecDeque<ProposalWinner<T>> = VecDeque::new();
+
 		/// Identity -> Concerns
 		pub Concerns get(fn concerns): map hasher(identity)
 			IdentityId<T> => Vec<Concern> = Vec::new();
@@ -183,6 +184,12 @@ decl_storage! {
 			(ConcernCID, ProposalCID) => IdentityId<T> = IdentityId::<T>::default();
 		/// Total Concerns
 		pub ConcernCount get(fn concern_count): u32 = 0;
+
+		/// Identity -> Votes for concerns (we have to keep track of the CIDs to reward the user)
+		pub ConcernVotes get(fn votes_concern): map hasher(identity)
+			IdentityId<T> => Vec<ConcernCID> = Vec::new();
+		/// Total votes for concerns
+		pub ConcernVoteCount get(fn vote_count_concern): u32 = 0;
 	}
 	add_extra_genesis {
 		build(|_| {
@@ -195,8 +202,10 @@ decl_event! {
 	pub enum Event<T> where Balance = BalanceOf<T> {
 		/// Rotated to the next state. \[NewState\]
 		StateRotated(States),
-		/// Total issued rewards for correct ovtes \[Balance\]
-		TotalVoteReward(Balance),
+		/// Total reward for correct votes after VoteProposal round \[Balance\]
+		TotalProposalReward(Balance),
+		/// Total reward for winning concerns and votes after VoteConcern round \[Balance\]
+		TotalConcernReward(Balance),
 	}
 }
 
@@ -206,6 +215,8 @@ decl_error! {
 		ConcernAlreadySubmitted,
 		/// Unable to add proposal because the concern limit is reached.
 		ConcernLimitReached,
+		/// Concern does not exist
+		ConcernNotExistant,
 		/// Identity level too low.
 		IdentityLevelTooLow,
 		/// Proposal was already submitted by another person
@@ -214,10 +225,12 @@ decl_error! {
 		ProposalNotExistant,
 		/// Unable to add proposal because the proposal limit is reached.
 		ProposalLimitReached,
-		/// User submitted too many proposals.
-		UserProposalLimitReached,
 		/// User submitted too many concerns.
 		UserConcernLimitReached,
+		/// User voted too many times on concerns.
+		UserConcernVoteLimitReached,
+		/// User submitted too many proposals.
+		UserProposalLimitReached,
 		/// User voted too many times.
 		UserProposalVoteLimitReached,
 		/// The operation requested cannot be executed because the pallet is in the wrong state.
@@ -390,6 +403,31 @@ decl_module! {
 			Self::add_proposal(id, proposal);
 		}
 
+		/// As an identified user, vote for a concern
+		#[weight = 10_000 + T::DbWeight::get().reads_writes(6,3)]
+		fn vote_concern(origin, concern: ConcernCID, proposal: ProposalCID) {
+			let caller = ensure_signed(origin)?;
+			// Ensure that the pallet is in the appropriate state
+			ensure!(<State>::get() == States::VoteConcern, Error::<T>::WrongState);
+			// Ensure that the concern exists
+			let proposer: IdentityId<T> = <ConcernToIdentity<T>>::get((&concern, &proposal));
+			ensure!(proposer != IdentityId::<T>::default(),
+				Error::<T>::ConcernNotExistant
+			);
+			// Ensure the identity level is high enough to vote.
+			let id: IdentityId<T> = T::Identity::get_identity_id(&caller);
+			ensure!(T::Identity::get_identity_level(&id) >= T::ConcernVoteIdentityLevel::get().into(),
+					Error::<T>::IdentityLevelTooLow
+			);
+			// Ensure the user has not surpassed the vote limit per user
+			ensure!(<ConcernVotes<T>>::get(&id).len() < T::ConcernVoteMaxPerIdentifiedUser::get().into(),
+					Error::<T>::UserConcernVoteLimitReached
+			);
+
+			// Optional: Ensure that the user did not already vote for the concern (design decision)
+			Self::add_vote_concern(id, concern, proposal, proposer);
+		}
+
 		/// As an identified user, vote for a proposal
 		#[weight = 10_000 + T::DbWeight::get().reads_writes(6,3)]
 		fn vote_proposal(origin, proposal: ProposalCID) {
@@ -472,6 +510,26 @@ impl<T: Trait> Module<T> {
 		<ProposalVoteCount>::mutate(|vc| *vc += 1);
 	}
 
+	/// Add vote to storage and update relevant storage values
+	fn add_vote_concern(id: IdentityId<T>, concern: ConcernCID, proposal: ProposalCID, proposer: IdentityId<T>) {
+		// Add concernCID to id votes
+		<ConcernVotes<T>>::mutate(&id, |vote_cids| {
+			vote_cids.push(concern.clone())
+		});
+		// Increment vote count within Concern structure
+		<Concerns<T>>::mutate(&proposer, |concerns| {
+			if let Some(p) = concerns.iter_mut().find(|el| {
+				el.concern == concern && el.associated_proposal == proposal
+			}) {
+				p.votes += 1;
+			}
+			// TODO: Better error handling. What if storage got corrupted somehow?
+		});
+		// Increment total vote count
+		// TODO: Overflow handling
+		<ConcernVoteCount>::mutate(|vc| *vc += 1);
+	}
+
 	/// Execute the state transit and schedule the next state transit
 	fn do_state_transit() -> DispatchResult {
 		let mut transit_time: T::BlockNumber = T::BlockNumber::from(0);
@@ -520,10 +578,10 @@ impl<T: Trait> Module<T> {
 					} else {
 						transit_time = T::ConcernVoteDuration::get();
 						*state = States::VoteConcern;
-						return *state;
 					}
 				},
 				States::VoteConcern => {
+					Self::evaluate_concern_votes();
 					*state = States::VoteCouncil;
 					transit_time = T::CouncilVoteRoundDuration::get();
 				},
@@ -554,7 +612,65 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	/// On state transit to VotePropose, evaluate all proposals and votes and pay correct voters.
+	/// On state transit from VoteConcern, evaluate all concerns and votes and pay winners and correct voters.
+	fn evaluate_concern_votes() {
+		let total_votes: u32 = <ConcernVoteCount>::get();
+		let round: u8 = <Round>::get();
+		let mut winners: VecDeque<ProposalWinner<T>> = <ProposalWinners<T>>::get(&round);
+		let mut total_reward_issued = BalanceOf::<T>::from(0);
+		let reward_propose: BalanceOf<T> = T::ConcernReward::get();
+		let reward_vote: BalanceOf<T> = T::ConcernVoteCorrectReward::get();
+
+		// Drain all Concerns and add winners into winner variable and into storage ProposalWinners
+		for (id, concerns) in <Concerns<T>>::drain() {
+			for concern in concerns.iter() {
+				// Here we inspect every single concern of a specific user. Add it if it won.
+				let vote_ratio = Permill::from_rational_approximation(concern.votes, total_votes);
+
+				if vote_ratio >= T::ConcernVoteAcceptanceMin::get() {
+					if let Some(winner) = winners.iter_mut().find(|el| el.proposal == concern.associated_proposal) {
+						winner.concerns.push(concern.concern.clone());
+
+						if T::Currency::deposit_into_existing(&T::Identity::get_address(&id), reward_propose).is_ok() {
+							total_reward_issued += reward_propose;
+						}
+					}
+				}
+			}
+		}
+
+		// Drain all voters ProposalVotes and reward them if the proposal they voted for won
+		for (id, votes) in <ConcernVotes<T>>::drain() {
+			for _ in votes.iter().filter(|v| {
+				// Only count votes for winning proposals
+				for winner in winners.iter() {
+					for concern in winner.concerns.iter() {
+						if *concern == **v { return true; }
+					}
+				}
+				false
+			}) {
+				// TODO: When tx by identity is implemented, change to deposit_creating
+				// (since identity does not require to spend fees for tx,
+				// the account might not have been created on chain)
+				// TODO: Error handling
+				if T::Currency::deposit_into_existing(&T::Identity::get_address(&id), reward_vote).is_ok() {
+					total_reward_issued += reward_vote;
+				}
+			}
+		}
+
+		ProposalWinners::<T>::insert(round, winners);
+		// Clear ProposalToIdentity, ProposalVoteCount, ProposalCount
+		// Avoid collecting the iterator to avoid creating a new Vector
+		ConcernToIdentity::<T>::drain().nth(usize::MAX);
+		ConcernVoteCount::put(0);
+		ConcernCount::put(0);
+		Self::deposit_event(Event::<T>::TotalConcernReward(total_reward_issued));
+	}
+
+
+	/// On state transit from VotePropose, evaluate all proposals and votes and pay correct voters.
 	fn evaluate_proposal_votes() {
 		let total_votes: u32 = <ProposalVoteCount>::get();
 		let round: u8 = <Round>::get();
@@ -569,7 +685,9 @@ impl<T: Trait> Module<T> {
 				let vote_ratio = Permill::from_rational_approximation(proposal.votes, total_votes);
 
 				if vote_ratio >= T::ProposeVoteAcceptanceMin::get() {
-					let document = ProposalWinner::<T>::new(id.clone(), proposal.proposal.clone(), vote_ratio);
+					let document = ProposalWinner::<T>::new(
+						Vec::new(), id.clone(), proposal.proposal.clone(), vote_ratio
+					);
 					winners.push(document);
 				}
 			}
@@ -603,7 +721,7 @@ impl<T: Trait> Module<T> {
 		ProposalToIdentity::<T>::drain().nth(usize::MAX);
 		ProposalVoteCount::put(0);
 		ProposalCount::put(0);
-		Self::deposit_event(Event::<T>::TotalVoteReward(total_reward_issued));
+		Self::deposit_event(Event::<T>::TotalProposalReward(total_reward_issued));
 	}
 
 	/*

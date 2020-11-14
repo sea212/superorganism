@@ -48,8 +48,8 @@ impl Default for Proposal {
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct Concern {
-	pub concern: ConcernCID,
 	pub associated_proposal: ProposalCID,
+	pub concern: ConcernCID,
 	pub votes: u32,
 }
 
@@ -70,20 +70,22 @@ impl Default for Concern {
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
 pub struct ProposalWinner<T: Trait> {
+	pub concerns: Vec<ConcernCID>,
 	pub proposer: IdentityId<T>, // For later rewards
 	pub proposal: ProposalCID,
 	pub vote_ratio: Permill
 }
 
 impl<T: Trait> ProposalWinner<T> {
-	pub fn new(proposer: IdentityId<T>, proposal: ProposalCID, vote_ratio: Permill) -> Self {
-		ProposalWinner{proposer, proposal, vote_ratio}
+	pub fn new(concerns: Vec<ConcernCID>, proposer: IdentityId<T>,
+				proposal: ProposalCID, vote_ratio: Permill) -> Self {
+		ProposalWinner{concerns, proposer, proposal, vote_ratio}
 	}
 }
 
 impl<T: Trait> Default for ProposalWinner<T> {
 	fn default() -> Self {
-		ProposalWinner::new(Default::default(), Default::default(), Default::default())
+		ProposalWinner::new(Vec::new(), Default::default(), Default::default(), Default::default())
 	}
 }
 

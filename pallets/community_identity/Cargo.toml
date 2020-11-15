@@ -5,7 +5,7 @@ edition = '2018'
 homepage = 'https://github.com/sea212/superorganism'
 license = 'Apache-2.0'
 name = 'pallet-community_identity'
-repository = 'https:/github.com/sea212/superorganism/master/pallets/community_identity'
+repository = 'https://github.com/sea212/superorganism/master/pallets/community_identity'
 version = '0.0.1'
 
 [package.metadata.docs.rs]

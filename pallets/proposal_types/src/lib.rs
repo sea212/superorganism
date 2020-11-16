@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use frame_support::dispatch::{Decode, Encode, Vec};
-use pallet_community_identity::IdentityId;
-use frame_system::Trait;
+#![cfg_attr(not(feature = "std"), no_std)]
+
+use frame_support::dispatch::{Codec, Decode, Encode, EncodeLike, fmt::Debug, Vec};
+use sp_arithmetic::Permill;
+
 #[cfg(feature = "std")]
 use frame_support::serde::{Deserialize, Serialize};
-use crate::Permill;
 
 
 // Important: Change Vec<u8> to a fixed length type (otherwise attackable)
@@ -69,21 +70,27 @@ impl Default for Concern {
 /// Contains one winning proposal
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
-pub struct ProposalWinner<T: Trait> {
+pub struct ProposalWinner<IdentityId> where
+	IdentityId: Codec + Clone + Eq + EncodeLike + Debug
+{
 	pub concerns: Vec<ConcernCID>,
-	pub proposer: IdentityId<T>, // For later rewards
+	pub proposer: IdentityId, // For later rewards
 	pub proposal: ProposalCID,
 	pub vote_ratio: Permill
 }
 
-impl<T: Trait> ProposalWinner<T> {
-	pub fn new(concerns: Vec<ConcernCID>, proposer: IdentityId<T>,
+impl<IdentityId> ProposalWinner<IdentityId> where
+	IdentityId: Codec + Clone + Eq + EncodeLike + Debug
+{
+	pub fn new(concerns: Vec<ConcernCID>, proposer: IdentityId,
 				proposal: ProposalCID, vote_ratio: Permill) -> Self {
 		ProposalWinner{concerns, proposer, proposal, vote_ratio}
 	}
 }
 
-impl<T: Trait> Default for ProposalWinner<T> {
+impl<IdentityId> Default for ProposalWinner<IdentityId> where
+	IdentityId: Codec + Clone + Eq + EncodeLike + Debug + Default
+{
 	fn default() -> Self {
 		ProposalWinner::new(Vec::new(), Default::default(), Default::default(), Default::default())
 	}

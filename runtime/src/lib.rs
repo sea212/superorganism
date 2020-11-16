@@ -41,9 +41,10 @@ pub use frame_support::{
 };
 
 /// Import custom pallets
-pub use pallet_proposal;
-pub use pallet_project;
 pub use pallet_community_identity;
+pub use pallet_council;
+pub use pallet_project;
+pub use pallet_proposal;
 
 /// An index to a block.
 pub type BlockNumber = u32;
@@ -356,6 +357,8 @@ impl pallet_proposal::Trait for Runtime {
 	type PalletsOrigin = OriginCaller;
 	type Proposal = Call;
 	type Identity = pallet_community_identity::Module<Runtime>;
+	type Council = pallet_council::Module<Runtime>;
+	type Project = pallet_project::Module<Runtime>;
 
 	// Parameters
 	type IdentifiedUserPenality = IdentifiedUserPenality;
@@ -387,10 +390,18 @@ impl pallet_proposal::Trait for Runtime {
 
 /// Configure the project pallet
 impl pallet_project::Trait for Runtime {
+	type Currency = pallet_balances::Module<Runtime>;
+	type Event = Event;
+	type Identity = pallet_community_identity::Module<Runtime>;
 }
 
 /// Configure the community_identity pallet
 impl pallet_community_identity::Trait for Runtime {
+}
+
+/// Configure the community_identity pallet
+impl pallet_council::Trait for Runtime {
+	type Identity = pallet_community_identity::Module<Runtime>;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
@@ -410,9 +421,11 @@ construct_runtime!(
 		Scheduler: pallet_scheduler::{Module, Call, Storage, Event<T>},
 		Sudo: pallet_sudo::{Module, Call, Config<T>, Storage, Event<T>},
 		// Custom pallets
-		Proposal: pallet_proposal::{Module, Call, Storage, Event<T>, Config},
-		Project: pallet_project::{Module},
 		CommunityIdentity: pallet_community_identity::{Module, Call},
+		Council: pallet_council::{Module, Call, Storage},
+		Project: pallet_project::{Module, Call, Storage, Event<T>},
+		Proposal: pallet_proposal::{Module, Call, Storage, Event<T>, Config},
+
 	}
 );
 

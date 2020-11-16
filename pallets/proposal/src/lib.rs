@@ -18,7 +18,7 @@
 //! Manages proposal and concern rounds as well as the correspondant voting rounds
 
 
-use frame_support::{decl_error, decl_module, decl_storage, decl_event, Parameter, ensure, print, debug,
+use frame_support::{decl_error, decl_module, decl_storage, decl_event, Parameter, ensure, /*print, debug,*/
 	dispatch::{Vec, DispatchResult, Dispatchable, DispatchError},
 	traits::{Get, Currency, ReservableCurrency,
 		schedule::{Anon, DispatchTime, LOWEST_PRIORITY},
@@ -33,9 +33,10 @@ use codec::Codec;
 use sp_arithmetic::Permill;
 // Identity pallet
 use pallet_community_identity::{ProofType, IdentityId, IdentityLevel, traits::PeerReviewedPhysicalIdentity};
+use pallet_council::{BlockNumber, DocumentCID, Ticket, traits::Council};
+use pallet_project::{types::{Project as ProjectType}, traits::ProjectTrait};
 // Custom types
-use crate::types::{Concern, ConcernCID, Proposal, ProposalCID, ProposalWinner, States};
-pub mod types;
+use pallet_proposal_types::{Concern, ConcernCID, Proposal, ProposalCID, ProposalWinner, States};
 #[cfg(test)]
 mod mock;
 #[cfg(test)]
@@ -48,6 +49,7 @@ pub trait Trait: frame_system::Trait {
 	// Type trait constraints
 	type Event: From<Event<Self>> + Into<<Self as frame_system::Trait>::Event>;
 
+	/// Type that manages balances
 	type Currency: ReservableCurrency<Self::AccountId>;
 
 	/// Define the Scheduler type. Just implement (unamed) scheduling trait Anon
@@ -58,6 +60,15 @@ pub trait Trait: frame_system::Trait {
 	/// Define Identity type. Must implement PeerReviewedPhysicalIdentity trait
 	type Identity: PeerReviewedPhysicalIdentity<ProofType, IdentityId = IdentityId<Self>,
 						IdentityLevel = IdentityLevel, Address = Self::AccountId>;
+
+	/// Define Council type. Must implement Council trait
+	type Council: Council<IdentityId = IdentityId<Self>, DocumentCID=DocumentCID,
+							BlockNumber=BlockNumber<Self>, Ticket=Ticket>;
+
+	// Define Project type. Must implement ProjectTrait trait
+	type Project: ProjectTrait<Balance = BalanceOf<Self>, IdentityId = IdentityId<Self>,
+					ProposalWinner=ProposalWinner<IdentityId<Self>>,
+					Project=ProjectType<BalanceOf<Self>, Self::BlockNumber, IdentityId<Self>>>;
 
 	// Parameters
 	/// How long is an identified user locked out from submitting proposals / concerns
@@ -174,7 +185,7 @@ decl_storage! {
 		pub ProposalCount get(fn proposal_count): u32 = 0;
 		/// Proposal winner for specific round
 		pub ProposalWinners get(fn proposal_winners): map hasher(identity)
-			u8 => VecDeque<ProposalWinner<T>> = VecDeque::new();
+			u8 => VecDeque<ProposalWinner<IdentityId<T>>> = VecDeque::new();
 
 		/// Identity -> Concerns
 		pub Concerns get(fn concerns): map hasher(identity)
@@ -190,6 +201,9 @@ decl_storage! {
 			IdentityId<T> => Vec<ConcernCID> = Vec::new();
 		/// Total votes for concerns
 		pub ConcernVoteCount get(fn vote_count_concern): u32 = 0;
+
+		/// Tickets used as reference for council polls targeting proposals
+		pub CouncilVoteTickets get(fn council_vote_tickets): Vec<Ticket> = Vec::new();
 	}
 	add_extra_genesis {
 		build(|_| {
@@ -199,13 +213,18 @@ decl_storage! {
 }
 
 decl_event! {
-	pub enum Event<T> where Balance = BalanceOf<T> {
+	pub enum Event<T> where Balance = BalanceOf<T>,
+							ID = IdentityId<T>,
+							PW = ProposalWinner<IdentityId<T>> {
 		/// Rotated to the next state. \[NewState\]
 		StateRotated(States),
 		/// Total reward for correct votes after VoteProposal round \[Balance\]
 		TotalProposalReward(Balance),
 		/// Total reward for winning concerns and votes after VoteConcern round \[Balance\]
 		TotalConcernReward(Balance),
+		/// If the council decides to deny a proposal, announce the proposal
+		/// and the votes \[ProposalWinner, Vec(id, vote)\]
+		CouncilDeniedProposal(PW, Vec<(ID, bool)>),
 	}
 }
 
@@ -479,6 +498,25 @@ impl<T: Trait> Module<T> {
 		<ConcernCount>::mutate(|cc| *cc += 1);
 	}
 
+	fn add_council_poll(mut winners: VecDeque<ProposalWinner<IdentityId<T>>>) {
+		let mut tickets: Vec<Ticket> = Vec::new();
+		let transit_time: T::BlockNumber = T::CouncilVoteRoundDuration::get();
+
+		// Add every proposal and its concerns to a freshly created council poll
+		for winner in winners.iter_mut() {
+			let mut documents: Vec<DocumentCID> = Vec::new();
+			documents.push(winner.proposal.clone());
+			documents.append(&mut winner.concerns);
+
+			// TODO: Better error handling
+			if let Ok(ticket) = T::Council::add_poll(documents, transit_time) {
+				tickets.push(ticket);
+			}
+		}
+
+		CouncilVoteTickets::put(tickets);
+	}
+
 	/// Add proposal to storage and update relevant storage values
 	fn add_proposal(id: IdentityId<T>, proposal: ProposalCID) {
 		// Create proper Proposal and add it to the users list of proposals
@@ -573,6 +611,10 @@ impl<T: Trait> Module<T> {
 				States::Concern => {
 					// Skip VoteConcern if no concerns exist
 					if <ConcernCount>::get() == 0 {
+						// Add every proposal and its concerns to a freshly created council poll
+						let round: u8 = <Round>::get();
+						let winners: VecDeque<ProposalWinner<IdentityId<T>>> = <ProposalWinners<T>>::get(&round);
+						Self::add_council_poll(winners);
 						*state = States::VoteCouncil;
 						transit_time = T::CouncilVoteRoundDuration::get();
 					} else {
@@ -581,11 +623,44 @@ impl<T: Trait> Module<T> {
 					}
 				},
 				States::VoteConcern => {
-					Self::evaluate_concern_votes();
-					*state = States::VoteCouncil;
+					// Determine winning concerns and add to associated winning proposals
+					let winners: VecDeque<ProposalWinner<IdentityId<T>>> = Self::evaluate_concern_votes();
+					// Add every proposal and its concerns to a freshly created council poll
+					Self::add_council_poll(winners);
 					transit_time = T::CouncilVoteRoundDuration::get();
+					*state = States::VoteCouncil;
 				},
 				States::VoteCouncil => {
+					let round = <Round>::get();
+					let winners = <ProposalWinners<T>>::get(&round);
+
+					// Get voting result and evaluate vote percentage
+					for (idx, ticket) in <CouncilVoteTickets>::get().iter().enumerate() {
+						// TODO: Better error handling (error = ticket number not found in council)
+						if let Some(result) = T::Council::get_result(ticket) {
+							let mut percentage_no = Permill::zero();
+							let mut votes_no: u32 = 0;
+
+							for _ in result.iter().filter(|v| v.1 == false) { votes_no += 1; }
+
+							if result.len() != 0 {
+								percentage_no = Permill::from_rational_approximation(
+									votes_no, result.len() as u32
+								);
+							}
+
+							// Spawn project from passed proposals
+							if percentage_no < T::CouncilAcceptConcernMinVotes::get() {
+								let _ = T::Project::spawn_project(winners[idx].clone());
+							} else {
+								Event::<T>::CouncilDeniedProposal(winners[idx].clone(), result);
+							}
+						}
+					}
+
+					// increment round and rotate state
+					if round == u8::MAX { Round::put(0); }
+					else { Round::put(round+1); }
 					*state = States::Propose;
 					transit_time = T::ProposeRoundDuration::get();
 				}
@@ -613,10 +688,10 @@ impl<T: Trait> Module<T> {
 	}
 
 	/// On state transit from VoteConcern, evaluate all concerns and votes and pay winners and correct voters.
-	fn evaluate_concern_votes() {
+	fn evaluate_concern_votes() -> VecDeque<ProposalWinner<IdentityId<T>>> {
 		let total_votes: u32 = <ConcernVoteCount>::get();
 		let round: u8 = <Round>::get();
-		let mut winners: VecDeque<ProposalWinner<T>> = <ProposalWinners<T>>::get(&round);
+		let mut winners: VecDeque<ProposalWinner<IdentityId<T>>> = <ProposalWinners<T>>::get(&round);
 		let mut total_reward_issued = BalanceOf::<T>::from(0);
 		let reward_propose: BalanceOf<T> = T::ConcernReward::get();
 		let reward_vote: BalanceOf<T> = T::ConcernVoteCorrectReward::get();
@@ -625,7 +700,11 @@ impl<T: Trait> Module<T> {
 		for (id, concerns) in <Concerns<T>>::drain() {
 			for concern in concerns.iter() {
 				// Here we inspect every single concern of a specific user. Add it if it won.
-				let vote_ratio = Permill::from_rational_approximation(concern.votes, total_votes);
+				let mut vote_ratio = Permill::zero();
+
+				if total_votes > 0 {
+					vote_ratio = Permill::from_rational_approximation(concern.votes, total_votes);
+				}
 
 				if vote_ratio >= T::ConcernVoteAcceptanceMin::get() {
 					if let Some(winner) = winners.iter_mut().find(|el| el.proposal == concern.associated_proposal) {
@@ -660,13 +739,14 @@ impl<T: Trait> Module<T> {
 			}
 		}
 
-		ProposalWinners::<T>::insert(round, winners);
+		ProposalWinners::<T>::insert(round, winners.clone());
 		// Clear ProposalToIdentity, ProposalVoteCount, ProposalCount
 		// Avoid collecting the iterator to avoid creating a new Vector
 		ConcernToIdentity::<T>::drain().nth(usize::MAX);
 		ConcernVoteCount::put(0);
 		ConcernCount::put(0);
 		Self::deposit_event(Event::<T>::TotalConcernReward(total_reward_issued));
+		return winners;
 	}
 
 
@@ -674,7 +754,7 @@ impl<T: Trait> Module<T> {
 	fn evaluate_proposal_votes() {
 		let total_votes: u32 = <ProposalVoteCount>::get();
 		let round: u8 = <Round>::get();
-		let mut winners: Vec<ProposalWinner<T>> = Vec::new();
+		let mut winners: Vec<ProposalWinner<IdentityId<T>>> = Vec::new();
 		let mut total_reward_issued = BalanceOf::<T>::from(0);
 		let reward: BalanceOf<T> = T::ProposeVoteCorrectReward::get();
 
@@ -682,10 +762,14 @@ impl<T: Trait> Module<T> {
 		for (id, proposals) in <Proposals<T>>::drain() {
 			for proposal in proposals.iter() {
 				// Here we inspect every single proposal of a specific user. Add it if it won.
-				let vote_ratio = Permill::from_rational_approximation(proposal.votes, total_votes);
+				let mut vote_ratio = Permill::zero();
+
+				if total_votes > 0 {
+					vote_ratio = Permill::from_rational_approximation(proposal.votes, total_votes);
+				}
 
 				if vote_ratio >= T::ProposeVoteAcceptanceMin::get() {
-					let document = ProposalWinner::<T>::new(
+					let document = ProposalWinner::<IdentityId<T>>::new(
 						Vec::new(), id.clone(), proposal.proposal.clone(), vote_ratio
 					);
 					winners.push(document);
@@ -724,8 +808,7 @@ impl<T: Trait> Module<T> {
 		Self::deposit_event(Event::<T>::TotalProposalReward(total_reward_issued));
 	}
 
-	/*
-	fn incr_round() {
+	/*fn incr_round() {
 		<Round>::mutate(|r| {
 			if *r == u8::MAX { *r = 0; }
 			else { *r += 1; }

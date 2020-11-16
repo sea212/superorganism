@@ -25,9 +25,10 @@ hex-literal = { optional = true, version = '0.3.1' }
 serde = { features = ['derive'], optional = true, version = '1.0.101' }
 
 # local dependencies
-pallet-proposal = { path = '../pallets/proposal', default-features = false, version = '0.0.1' }
-pallet-project = { path = '../pallets/project', default-features = false, version = '0.0.1' }
 pallet-community_identity = { path = '../pallets/community_identity', default-features = false, version = '0.0.1' }
+pallet-council = { path = '../pallets/council', default-features = false, version = '0.0.1' }
+pallet-project = { path = '../pallets/project', default-features = false, version = '0.0.1' }
+pallet-proposal = { path = '../pallets/proposal', default-features = false, version = '0.0.1' }
 
 # Substrate dependencies
 frame-benchmarking = { default-features = false, optional = true, version = '2.0.0' }
@@ -97,7 +98,8 @@ std = [
     'sp-transaction-pool/std',
     'sp-version/std',
 	# custom
-    'pallet-proposal/std',
-    'pallet-project/std',
 	'pallet-community_identity/std',
+	'pallet-council/std',
+    'pallet-project/std',
+    'pallet-proposal/std',
 ]

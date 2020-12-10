@@ -39,25 +39,25 @@ type Ticket<T> = <T as frame_system::Trait>::AccountId;
 /// Structure that contains the proof
 #[derive(Clone, Debug, Decode, Encode, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
-pub struct PhysicalProof<BlockNumber, ProofData> where
+pub struct PhysicalProof<Timestamp, ProofData> where
 	ProofData: Codec + Clone + Debug + Eq + PartialEq,
-	BlockNumber: Codec + Clone + Debug + Eq + PartialEq,
+	Timestamp: AtLeast32Bit + Parameter + Default + Debug + Copy,
 {
 	proof: ProofData,
-	date: BlockNumber,
+	date: Timestamp,
 }
 
 /// Structure that contains the identity ID, level and proof
 #[derive(Clone, Decode, Debug, Encode, Eq, PartialEq)]
 #[cfg_attr(feature = "std", derive(Serialize, Deserialize))]
-pub struct PhysicalIdentityData<BlockNumber, AccountId, ProofData> where
+pub struct PhysicalIdentityData<Timestamp, AccountId, ProofData> where
 	ProofData: Codec + Clone + Debug + Eq + PartialEq,
 	AccountId: Codec + Clone + Debug + EncodeLike + Eq,
-	BlockNumber: Codec + Clone + Debug + Eq + PartialEq,
+	Timestamp: AtLeast32Bit + Parameter + Default + Debug + Copy,
 {
 	identity: AccountId,
 	level: IdentityLevel,
-	proof: PhysicalProof<BlockNumber, ProofData>,
+	proof: PhysicalProof<Timestamp, ProofData>,
 }
 
 /// Configure the pallet by specifying the parameters and types on which it depends.

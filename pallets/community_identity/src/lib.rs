@@ -13,7 +13,12 @@
 // limitations under the License.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-use frame_support::{decl_module, dispatch::{DispatchError, fmt::Debug, Vec}};
+use frame_support::{
+	decl_module,
+	dispatch::{DispatchError, fmt::Debug, Vec},
+	Parameter,
+	sp_runtime::traits::{AtLeast32Bit, Scale},
+};
 use frame_system::ensure_signed;
 use codec::{Codec, Decode, Encode, EncodeLike};
 #[cfg(feature = "std")]
@@ -58,15 +63,17 @@ pub struct PhysicalIdentityData<BlockNumber, AccountId, ProofData> where
 /// Configure the pallet by specifying the parameters and types on which it depends.
 pub trait Trait: frame_system::Trait {
 	// type Event: From<Event> + Into<<Self as frame_system::Trait>::Event>;
+	type Timestamp: Parameter + Default + AtLeast32Bit
+		+ Scale<Self::BlockNumber, Output = Self::Timestamp> + Copy;
 }
 
 decl_module! {
 	pub struct Module<T: Trait> for enum Call where origin: T::Origin {
 		/// Request a peer review to gain a specific IdentityLev
 		#[weight = 10_000]
-		fn request_peer_review(origin, identity_level: IdentityLevel) {
+		fn request_peer_review(origin, identity_level: IdentityLevel, at: T::Timestamp) {
 			let caller = ensure_signed(origin)?;
-			Self::do_request_peer_review(caller, identity_level)?;
+			Self::do_request_peer_review(caller, identity_level, at)?;
 			// What happens here is that it either returns the Err(e) or Ok(()), DispatchResult is implicit
 		}
 
@@ -94,7 +101,7 @@ decl_module! {
 }
 
 impl<T: Trait> Module<T> {
-	fn do_request_peer_review(user: T::AccountId, _identity_level: IdentityLevel)
+	fn do_request_peer_review(user: T::AccountId, _identity_level: IdentityLevel, _at: T::Timestamp)
 		-> Result<T::AccountId, DispatchError>
 	{
 		// TODO implement
@@ -119,6 +126,10 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
+	fn do_get_appointments(_identity: &IdentityId<T>) -> Vec<(T::Timestamp, Vec<IdentityId<T>>)> {
+		Default::default()
+	}
+
 	fn do_get_identity_level(_identity: &IdentityId<T>) -> IdentityLevel {
 		5
 	}
@@ -135,14 +146,15 @@ impl<T: Trait> Module<T> {
 impl<T: Trait> traits::PeerReviewedPhysicalIdentity<ProofType> for Module<T> {
 	type Address = T::AccountId;
 	type Ticket = T::AccountId;
+	type Timestamp = T::Timestamp;
 	type IdentityLevel = IdentityLevel;
 	type IdentityId = IdentityId<T>;
 
 	/// Request a peer review to gain a specific IdentityLevel
-	fn request_peer_review(user: Self::Address, identity_level: Self::IdentityLevel)
+	fn request_peer_review(user: Self::Address, identity_level: Self::IdentityLevel, at: Self::Timestamp)
 		-> Result<Self::Ticket, DispatchError>
 	{
-		Self::do_request_peer_review(user, identity_level)
+		Self::do_request_peer_review(user, identity_level, at)
 	}
 
 	/// As a reviewer, approve a reviewed PhysicalIdentity by supplying a proof
@@ -163,6 +175,12 @@ impl<T: Trait> traits::PeerReviewedPhysicalIdentity<ProofType> for Module<T> {
 	{
 		Self::do_report_missing(review_process, missing)
 	}
+
+	/// Get the appointments for a DDI (when the DDI has to participate in an audit)
+	fn get_appointments(identity: &Self::IdentityId) -> Vec<(Self::Timestamp, Vec<Self::IdentityId>)> {
+		Self::do_get_appointments(identity)
+	}
+
 
 	/// Receive the identity level of a specific PhysicalIdentity.
 	fn get_identity_level(identity: &Self::IdentityId) -> Self::IdentityLevel {

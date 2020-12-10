@@ -115,6 +115,9 @@ pub const MINUTES: BlockNumber = 60_000 / (MILLISECS_PER_BLOCK as BlockNumber);
 pub const HOURS: BlockNumber = MINUTES * 60;
 pub const DAYS: BlockNumber = HOURS * 24;
 
+// Timestamp format
+pub type Moment = u64;
+
 /// The version information used to identify this runtime when compiled natively.
 #[cfg(feature = "std")]
 pub fn native_version() -> NativeVersion {
@@ -226,7 +229,7 @@ parameter_types! {
 
 impl pallet_timestamp::Trait for Runtime {
 	/// A timestamp: milliseconds since the unix epoch.
-	type Moment = u64;
+	type Moment = Moment;
 	type OnTimestampSet = Aura;
 	type MinimumPeriod = MinimumPeriod;
 	type WeightInfo = ();
@@ -397,6 +400,7 @@ impl pallet_project::Trait for Runtime {
 
 /// Configure the community_identity pallet
 impl pallet_community_identity::Trait for Runtime {
+	type Timestamp = Moment;
 }
 
 /// Configure the community_identity pallet

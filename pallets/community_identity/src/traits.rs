@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use frame_support::dispatch::{Codec, Decode, DispatchError, Encode, EncodeLike, fmt::Debug};
+use frame_support::dispatch::{Codec, Decode, DispatchError, Encode, EncodeLike, fmt::Debug, Vec};
 use num_traits::Num;
 
 /// Trait for identity modules that want to support peer reviewed physical identities
@@ -45,6 +45,8 @@ pub trait PeerReviewedPhysicalIdentity<ProofData>
 	fn approve_identity(review_process: Self::Ticket, proof_data: ProofData) -> Result<(), DispatchError>;
 	/// As a reviewer, reject a reviewed PhysicalIdentity
 	fn reject_identity(review_process: Self::Ticket) -> Result<(), DispatchError>;
+	/// As a participant, report a missing participant
+	fn report_missing(review_process: Self::Ticket, missing: Vec<Self::IdentityId>) -> Result<(), DispatchError>;
 	/// Receive the identity level of a specific PhysicalIdentity.
 	fn get_identity_level(identity: &Self::IdentityId) -> Self::IdentityLevel;
 	/// Get IdentityId for an address

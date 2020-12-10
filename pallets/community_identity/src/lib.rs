@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #![cfg_attr(not(feature = "std"), no_std)]
-use frame_support::{decl_module, dispatch::{DispatchError, fmt::Debug,}};
+use frame_support::{decl_module, dispatch::{DispatchError, fmt::Debug, Vec}};
 use frame_system::ensure_signed;
 use codec::{Codec, Decode, Encode, EncodeLike};
 #[cfg(feature = "std")]
@@ -83,6 +83,13 @@ decl_module! {
 			let _ = ensure_signed(origin)?;
 			Self::do_reject_identity(review_process)?;
 		}
+
+		/// As a participant, report a missing participant
+		#[weight = 10_000]
+		pub fn report_missing(origin, review_process: Ticket<T>, missing: Vec<IdentityId<T>>) {
+			let _ = ensure_signed(origin)?;
+			Self::do_report_missing(review_process, missing)?;
+		}
 	}
 }
 
@@ -103,6 +110,12 @@ impl<T: Trait> Module<T> {
 
 	fn do_reject_identity(_review_process: Ticket<T>) -> Result<(), DispatchError> {
 		// TODO implement
+		Ok(())
+	}
+
+	fn do_report_missing(_review_process: Ticket<T>, _missing: Vec<IdentityId<T>>)
+		-> Result<(), DispatchError>
+	{
 		Ok(())
 	}
 
@@ -142,6 +155,13 @@ impl<T: Trait> traits::PeerReviewedPhysicalIdentity<ProofType> for Module<T> {
 	/// As a reviewer, reject a reviewed PhysicalIdentity
 	fn reject_identity(review_process: Self::Ticket) -> Result<(), DispatchError> {
 		Self::do_reject_identity(review_process)
+	}
+
+	/// As a participant, report a missing participant
+	fn report_missing(review_process: Self::Ticket, missing: Vec<Self::IdentityId>)
+		-> Result<(), DispatchError>
+	{
+		Self::do_report_missing(review_process, missing)
 	}
 
 	/// Receive the identity level of a specific PhysicalIdentity.

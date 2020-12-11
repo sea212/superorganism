@@ -122,18 +122,11 @@ decl_module! {
 			Self::do_accept_offer(T::Identity::get_identity_id(&caller), project, position, salary)?;
 		}
 
-		/// As a project leader, fire a worker
+		/// As a participant, vote to replace a colleague
 		#[weight = 10_000]
-		fn fire(origin, worker: IdentityId<T>, project: ProjectID) {
+		fn vote_replace(origin, colleague: IdentityId<T>, project: ProjectID) {
 			let caller = ensure_signed(origin)?;
-			Self::do_fire(T::Identity::get_identity_id(&caller), worker, project)?;
-		}
-
-		/// As a worker, vote to replace the project leader
-		#[weight = 10_000]
-		fn vote_replace_pl(origin, pl: IdentityId<T>, project: ProjectID) {
-			let caller = ensure_signed(origin)?;
-			Self::do_vote_replace_pl(pl, T::Identity::get_identity_id(&caller), project)?;
+			Self::do_vote_replace(colleague, T::Identity::get_identity_id(&caller), project)?;
 		}
 	}
 }
@@ -193,15 +186,8 @@ impl<T: Trait> Module<T> {
 		Ok(())
 	}
 
-	/// As a project leader, fire a worker
-	fn do_fire(_pl: IdentityId<T>, _worker: IdentityId<T>, _project: ProjectID)
-		-> Result<(), DispatchError>
-	{
-		Ok(())
-	}
-
-	/// As a worker, vote to replace the project leader
-	fn do_vote_replace_pl(_pl: IdentityId<T>, _worker: IdentityId<T>, _project: ProjectID)
+	/// As a participant, vote to replace a colleague
+	fn do_vote_replace(_colleague: IdentityId<T>, _worker: IdentityId<T>, _project: ProjectID)
 		-> Result<(), DispatchError>
 	{
 		Ok(())
@@ -279,18 +265,11 @@ impl<T: Trait> ProjectTrait for Module<T> {
 		Self::do_accept_offer(applicant, project, position, salary)
 	}
 
-	/// As a project leader, fire a worker
-	fn fire(pl: Self::IdentityId, worker: Self::IdentityId, project: ProjectID)
+	/// As a participant, vote to replace a colleague
+	fn vote_replace(colleague: Self::IdentityId, worker: Self::IdentityId, project: ProjectID)
 		-> Result<(), DispatchError>
 	{
-		Self::do_fire(pl, worker, project)
-	}
-
-	/// As a worker, vote to replace the project leader
-	fn vote_replace_pl(pl: Self::IdentityId, worker: Self::IdentityId, project: ProjectID)
-		-> Result<(), DispatchError>
-	{
-		Self::do_vote_replace_pl(pl, worker, project)
+		Self::do_vote_replace(colleague, worker, project)
 	}
 
 	/// Get project

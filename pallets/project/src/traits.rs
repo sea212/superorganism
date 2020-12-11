@@ -54,11 +54,8 @@ pub trait ProjectTrait
 	// As an applicant, accept an offer	
 	fn accept_offer(applicant: Self::IdentityId, project: ProjectID, position: DocumentCID, salary: Self::Balance)
 		-> Result<(), DispatchError>;
-	// As a project leader, fire a worker
-	fn fire(pl: Self::IdentityId, worker: Self::IdentityId, project: ProjectID)
-		-> Result<(), DispatchError>;
-	// As a worker, vote to replace the project leader
-	fn vote_replace_pl(pl: Self::IdentityId, worker: Self::IdentityId, project: ProjectID)
+	// As a participant, vote to replace a colleague
+	fn vote_replace(pl: Self::IdentityId, worker: Self::IdentityId, project: ProjectID)
 		-> Result<(), DispatchError>;
 	/// Get project
 	fn get_project(project: ProjectID) -> Result<Option<Self::Project>, DispatchError>;

@@ -10,8 +10,7 @@ be "revived" at any time if the community decides to do so).
 
 To experience this system, you can either run a pre-built vm (1) or build everything from the sources and run it directly on your machine (2).
 
-1 - Using the pre-built VM
---------------------------
+### 1 - Using the pre-built VM
 1) Install VirtualBox
 2) Extract Superorganism.vdi.xz, you can retrieve it from IPFS:
    - Direct: ipfs://QmPHTjEYS8J8gfQJZ9gzq1bGLmjkT2Gb5jD19znLvtjzSV?filename=Superorganism.vdi.xz
@@ -25,8 +24,7 @@ To experience this system, you can either run a pre-built vm (1) or build everyt
 8) Launch firefox, it should display the webpage at localhost:3000
 9) Interact with the system.
 
-2 - Build everything from sources
----------------------------------
+### 2 - Build everything from sources
 1) Install rustup (https://rustup.rs/)
 2) Install the nightly compiler toolchain: rustup toolchain install nightly-2020-10-05
 3) List rust toolchains: rustup show
